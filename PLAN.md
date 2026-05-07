@@ -418,9 +418,11 @@ pub fn get_list() -> Vec<PathBuf> {
 | `Ctrl+O` | Yazi: salir con `ExitAction::SpawnYazi`. | `app.exit_action = ...` |
 | `↑` / `↓` | Navegar lista. | `app.list_state.select_next/previous()` |
 | `Tab` | Cambiar foco List ↔ Input. | `app.focus = !app.focus` |
-| `Backspace` | Borrar último char del query. | `app.query.pop()` |
-| `Esc` (en input) | Limpiar query. | `app.query.clear()` |
-| Cualquier char | Añadir al query (si focus=Input). | `app.query.push(c)` |
+| `Backspace` | Borrar último char del query → re-filtra. | `app.query.pop(); app.apply_query()` |
+| `Esc` (en input) | Limpiar query → mostrar items sin filtrar. | `app.query.clear(); app.apply_query()` |
+| Cualquier char | Añadir al query (si focus=Input) → re-filtra. | `app.query.push(c); app.apply_query()` |
+
+> **Nota:** `apply_query()` se llama tras cada modificación del query. Esto recalcula `filtered_indices` y **resetea la selección al primer item** (`index 0`), porque al refinar la búsqueda el usuario quiere ver el nuevo top match, no un índice obsoleto de la lista anterior.
 
 **Estructura del event loop:**
 ```rust
@@ -481,6 +483,8 @@ impl App {
     pub fn handle_esc(&mut self) { ... }
 
     /// Handle de tecla genérica.
+    /// Si la tecla modifica el query (char, backspace, clear),
+    /// dispara `apply_query()` que re-filtra y resetea selección.
     pub fn handle_key(&mut self, key: KeyEvent) { ... }
 
     /// Merge de zoxide con items de walker.
@@ -523,7 +527,9 @@ pub fn apply_query(&mut self) {
     scored.sort_by(|a, b| b.1.cmp(&a.1));
     self.filtered_indices = scored.into_iter().map(|(i, _)| i).collect();
 
-    // Resetear selección si los items cambiaron
+    // Resetear selección al primer item.
+    // Al refinar el query (más chars = más acotado), el usuario quiere ver
+    // el nuevo mejor match, no un índice fantasma de la lista anterior.
     if !self.filtered_indices.is_empty() {
         self.list_state.select(Some(0));
     }
@@ -1092,6 +1098,7 @@ cargo build --release && cp target/release/cdx-rs.exe ~/.local/bin/
 | Ctrl+C = exit | ✅ | ✅ P3 | |
 | Shortcut Alt+C (PSReadLine) | ➕ nuevo | ✅ P7 | |
 | Query persiste tras cd .. (Esc) | ➕ nuevo | ✅ P3 | |
+| Selección resetea al primer item al escribir | ➕ nuevo | ✅ P4 | |
 
 ---
 
