@@ -159,12 +159,23 @@ pub struct App {
 
     // ── Matcher ──
     pub matcher: Matcher,              // nucleo::Matcher (se reusa)
+
+    // ── Grep mode ──
+    pub grep_pending: bool,            // ¿rg en cola por debounce?
+    pub grep_results: Vec<GrepMatch>,  // Resultados de rg --vimgrep
+    pub grep_search_root: PathBuf,     // Root clampeado a HOME
 }
 
 pub enum Mode {
     Find,     // Listar directorios
     Search,   // Listar archivos
-    Results,  // Resultados de búsqueda global (-g) — FUTURO
+    Grep,     // Buscar contenido DENTRO de archivos (rg subprocess)
+}
+
+pub struct GrepMatch {
+    pub file_path: String,    // "src/main.rs"
+    pub line_number: u32,     // 42
+    pub match_text: String,   // "    fn main() {"
 }
 
 pub struct DirEntryItem {
@@ -408,12 +419,12 @@ pub fn get_list() -> Vec<PathBuf> {
 
 | Tecla | Acción | Código |
 |---|---|---|
-| `Enter` | En Find: cd al dir seleccionado. En Search: abrir archivo con bat. En ambos: regenerar items. | `app.handle_enter()` |
+| `Enter` | Find → `cd` al dir. Search → abrir archivo con bat. **Grep → `cd` al dir padre** del archivo. | `app.handle_enter()` |
 | `Esc` | Subir al padre (`cd ..`). **El query NO se borra**, se re-filtra sobre los nuevos items. Si ya está en raíz → `should_quit = true`. | `app.handle_esc()` |
 | `Ctrl+C` | Salir (quedarse en dir actual). | `app.should_quit = true` |
-| `Ctrl+G` | Toggle Find ↔ Search. | `app.mode = !app.mode` |
+| `Ctrl+G` | Toggle Find → Search → **Grep → Find** (3 vías). Al entrar a Grep: `show_winhidden = false` + se muestra mensaje al usuario. | `app.switch_mode()` |
 | `Ctrl+A` | Toggle dotfiles. | `app.show_dotfiles = !app.show_dotfiles` |
-| `Ctrl+W` | Toggle WinHidden. | `app.show_winhidden = !app.show_winhidden` |
+| `Ctrl+W` | Toggle WinHidden. En Grep: se re-ejecuta `rg` con nuevo filtro. | `app.toggle_winhidden()` |
 | `Ctrl+H` | Ir a HOME. | `app.current_dir = dirs::home_dir()` |
 | `Ctrl+O` | Yazi: salir con `ExitAction::SpawnYazi`. | `app.exit_action = ...` |
 | `↑` / `↓` | Navegar lista. | `app.list_state.select_next/previous()` |
@@ -424,26 +435,38 @@ pub fn get_list() -> Vec<PathBuf> {
 
 > **Nota:** `apply_query()` se llama tras cada modificación del query. Esto recalcula `filtered_indices` y **resetea la selección al primer item** (`index 0`), porque al refinar la búsqueda el usuario quiere ver el nuevo top match, no un índice obsoleto de la lista anterior.
 
-**Estructura del event loop:**
+**Estructura del event loop con debounce de 300ms para Grep:**
 ```rust
 pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
-    let mut terminal = ratatui::init();  // Setup terminal + raw mode + panic hook
+    let mut terminal = ratatui::init();
     let mut app = App::new(initial_query)?;
 
-    // Carga inicial de items
     app.refresh_items();
 
     while !app.should_quit {
         terminal.draw(|f| ui::render(f, &mut app))?;
 
-        if let Event::Key(key) = event::read()? {
-            if key.kind == KeyEventKind::Press {
-                app.handle_key(key);
+        // Grep mode: poll con timeout de 300ms para debounce
+        // Si el usuario sigue escribiendo, el timer se resetea.
+        // Cuando se detiene 300ms, se ejecuta rg.
+        let timeout = if app.mode == Mode::Grep && app.grep_pending {
+            Duration::from_millis(app.grep_debounce_ms)
+        } else {
+            Duration::from_millis(50)
+        };
+
+        if event::poll(timeout)? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    app.handle_key(key);  // key → modifica query → grep_pending = true
+                }
             }
+        } else if app.grep_pending && app.mode == Mode::Grep {
+            app.run_grep_search();  // Timeout → ejecutar rg
         }
     }
 
-    ratatui::restore();  // Restaura terminal
+    ratatui::restore();
 
     // Si es Ctrl+O, spawn yazi
     if let ExitAction::SpawnYazi(path) = &app.exit_action {
@@ -464,6 +487,16 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
 
 ### 4.7 `tui/app.rs` — Lógica de Estado
 
+**Campos de App relacionados con Grep (añadir al struct):**
+
+```rust
+    // ── Grep mode ──
+    pub grep_pending: bool,            // ¿rg en cola por debounce?
+    pub grep_results: Vec<GrepMatch>,  // Resultados de rg --vimgrep
+    pub grep_search_root: PathBuf,     // Root clampeado a HOME
+    pub grep_debounce_ms: u64,         // Default 300
+```
+
 **Métodos principales:**
 ```rust
 impl App {
@@ -472,10 +505,13 @@ impl App {
     /// Regenera items (directorios o archivos) desde el current_dir.
     pub fn refresh_items(&mut self) { ... }
 
-    /// Aplica fuzzy filtering con nucleo sobre self.items → self.filtered_indices.
+    /// En modo Find/Search: fuzzy filtering con nucleo sobre self.items.
+    /// En modo Grep: marca grep_pending = true (el debounce ejecuta rg).
     pub fn apply_query(&mut self) { ... }
 
     /// Handle de Enter según modo actual.
+    /// Find → cd al directorio. Search → abrir archivo con bat.
+    /// Grep → cd al directorio padre del archivo (equivalente a -g).
     pub fn handle_enter(&mut self) { ... }
 
     /// Handle de Esc (subir al padre).
@@ -483,9 +519,27 @@ impl App {
     pub fn handle_esc(&mut self) { ... }
 
     /// Handle de tecla genérica.
-    /// Si la tecla modifica el query (char, backspace, clear),
-    /// dispara `apply_query()` que re-filtra y resetea selección.
+    /// Si la tecla modifica el query (char, backspace, clear):
+    ///   Find/Search → apply_query() (fuzzy)
+    ///   Grep → marca grep_pending = true (debounce)
     pub fn handle_key(&mut self, key: KeyEvent) { ... }
+
+    /// Toggle 3 vías: Find → Search → Grep → Find.
+    /// Al entrar a Grep:
+    ///   1. show_winhidden = false (con mensaje al usuario)
+    ///   2. grep_search_root = clamp_search_root()
+    pub fn switch_mode(&mut self) { ... }
+
+    /// Toggle WinHidden. En modo Grep, re-ejecuta rg con nuevo filtro.
+    pub fn toggle_winhidden(&mut self) { ... }
+
+    /// Clampea current_dir a HOME.
+    /// Si current_dir está fuera de HOME → devuelve HOME.
+    fn clamp_search_root(&self) -> PathBuf { ... }
+
+    /// Ejecuta rg --vimgrep sobre grep_search_root con el query actual.
+    /// Parse la salida en grep_results, que se usa como items de la lista.
+    pub fn run_grep_search(&mut self) { ... }
 
     /// Merge de zoxide con items de walker.
     fn merge_zoxide(&mut self, walker_items: Vec<DirEntryItem>) -> Vec<DirEntryItem> { ... }
@@ -498,9 +552,19 @@ impl App {
 }
 ```
 
-**`apply_query` — Fuzzy filtering con nucleo:**
+**`apply_query` — Fuzzy filtering (Find/Search) o Grep pending (Grep):**
 ```rust
 pub fn apply_query(&mut self) {
+    if self.mode == Mode::Grep {
+        // En Grep mode, no hay fuzzy filtering sobre resultados.
+        // Marcamos pending para que el debounce ejecute rg con el query.
+        if !self.query.is_empty() {
+            self.grep_pending = true;
+        }
+        return;
+    }
+
+    // Find / Search: fuzzy filtering con nucleo (sin cambios)
     if self.query.is_empty() {
         self.filtered_indices = (0..self.items.len()).collect();
         return;
@@ -512,7 +576,6 @@ pub fn apply_query(&mut self) {
         Normalization::Smart,
     );
 
-    // Para path matching, activar match_paths
     let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
 
     let mut scored: Vec<(usize, u16)> = self.items
@@ -528,8 +591,119 @@ pub fn apply_query(&mut self) {
     self.filtered_indices = scored.into_iter().map(|(i, _)| i).collect();
 
     // Resetear selección al primer item.
-    // Al refinar el query (más chars = más acotado), el usuario quiere ver
-    // el nuevo mejor match, no un índice fantasma de la lista anterior.
+    if !self.filtered_indices.is_empty() {
+        self.list_state.select(Some(0));
+    }
+}
+```
+
+**`switch_mode` — Toggle 3 vías:**
+```rust
+pub fn switch_mode(&mut self) {
+    self.mode = match self.mode {
+        Mode::Find => Mode::Search,
+        Mode::Search => Mode::Grep,
+        Mode::Grep => Mode::Find,
+    };
+
+    if self.mode == Mode::Grep {
+        // Auto-desactivar WinHidden al entrar a Grep
+        let was_hidden = self.show_winhidden;
+        self.show_winhidden = false;
+        self.grep_search_root = self.clamp_search_root();
+
+        // Mostrar mensaje al usuario si se desactivó WinHidden
+        if was_hidden {
+            eprintln!(
+                "[cdx] Grep mode: WinHidden auto-disabled (Ctrl+W to re-enable)"
+            );
+        }
+
+        // Si hay query, marcar pending para búsqueda automática
+        if !self.query.is_empty() {
+            self.grep_pending = true;
+        }
+    }
+
+    self.refresh_items();
+}
+```
+
+**`clamp_search_root`:**
+```rust
+fn clamp_search_root(&self) -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+    if self.current_dir.starts_with(&home) {
+        self.current_dir.clone()       // Dentro de HOME → busca desde aquí
+    } else {
+        home                           // Fuera de HOME → busca desde ~
+    }
+}
+```
+
+**`run_grep_search` — Ejecutar rg --vimgrep:**
+```rust
+pub fn run_grep_search(&mut self) {
+    self.grep_pending = false;
+
+    if self.query.is_empty() {
+        self.grep_results.clear();
+        self.items.clear();
+        self.filtered_indices.clear();
+        return;
+    }
+
+    let root = &self.grep_search_root;
+
+    let mut cmd = std::process::Command::new("rg");
+    cmd.args(["--vimgrep", "--smart-case", "--max-depth", "5"]);
+
+    // Exclusiones (siempre activas)
+    for d in EXCLUDE_DIRS { cmd.args(["--glob", &format!("!{}", d)]); }
+    for p in EXCLUDE_PATH_GLOBS { cmd.args(["--glob", &format!("!{}", p)]); }
+
+    // WinHidden: solo si NO está activo
+    if !self.show_winhidden {
+        for d in EXCLUDE_WIN_DIRS { cmd.args(["--glob", &format!("!{}", d)]); }
+    }
+
+    // Dotfiles: solo si NO está activo
+    if !self.show_dotfiles {
+        cmd.args(["--glob", "!.*"]);
+    }
+
+    cmd.arg(&self.query).arg(root);
+
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(_) => { self.grep_results.clear(); return; }
+    };
+
+    // Parsear output --vimgrep: "path:line:col:text"
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    self.grep_results = stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.splitn(4, ':').collect();
+            if parts.len() < 4 { return None; }
+            Some(GrepMatch {
+                file_path: parts[0].to_string(),
+                line_number: parts[1].parse().unwrap_or(0),
+                match_text: parts[3].to_string(),
+            })
+        })
+        .collect();
+
+    // Los grep_results se usan como items de la lista
+    self.items = self.grep_results.iter().map(|m| DirEntryItem {
+        display: format!("{}:{}", m.file_path, m.line_number),
+        rel_path: m.file_path.clone(),
+        full_path: root.join(&m.file_path),
+        is_zoxide: false,
+        is_dir: false,
+    }).collect();
+
+    self.filtered_indices = (0..self.items.len()).collect();
     if !self.filtered_indices.is_empty() {
         self.list_state.select(Some(0));
     }
@@ -660,13 +834,14 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 ```
 
-#### `render_header` — Línea superior de atajos
+#### `render_header` — Línea superior de atajos (según modo)
 
 ```rust
 fn render_header(frame: &mut Frame, area: Rect, app: &mut App) {
     let label = match app.mode {
         Mode::Find => "Enter (cd) | Esc (..) | Ctrl+G (Search) | Ctrl+O (yazi)",
-        Mode::Search => "Enter (open) | Esc (..) | Ctrl+G (Find) | Ctrl+H (home)",
+        Mode::Search => "Enter (open) | Esc (..) | Ctrl+G (Grep) | Ctrl+H (home)",
+        Mode::Grep => "Enter (cd to parent) | Esc (..) | Ctrl+G (Find) | Ctrl+H (home)",
     };
     frame.render_widget(
         Paragraph::new(label).style(Style::default().fg(Color::Cyan)),
@@ -679,11 +854,14 @@ fn render_header(frame: &mut Frame, area: Rect, app: &mut App) {
 
 ```rust
 fn render_status(frame: &mut Frame, area: Rect, app: &mut App) {
-    let path = display_path(&app.current_dir);
+    let path = match app.mode {
+        Mode::Grep => display_path(&app.grep_search_root),
+        _ => display_path(&app.current_dir),
+    };
     let mode = match app.mode {
         Mode::Find => "Find",
         Mode::Search => "Search",
-        Mode::Results => "Results",
+        Mode::Grep => "Grep",
     };
     let dot = if app.show_dotfiles { "✓" } else { "✗" };
     let win = if app.show_winhidden { "✓" } else { "✗" };
@@ -749,6 +927,28 @@ fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
 
     frame.render_widget(block, area);
     frame.render_widget(paragraph, inner);
+}
+```
+
+**Preview en modo Grep:** Se genera mediante `rg --context=2 --color=always` sobre el archivo seleccionado, con el query como patrón. El output de `rg` ya viene coloreado (el match se resalta en rojo por defecto). El preview se regenera al cambiar de selección en la lista:
+
+```rust
+// En preview/mod.rs (modo Grep):
+pub fn grep_preview(file_path: &Path, query: &str) -> String {
+    let output = std::process::Command::new("rg")
+        .args(["--context=2", "--color=always", "--max-count", "50"])
+        .arg(query)
+        .arg(file_path)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    if output.is_empty() {
+        format!(" (no matches in {})", file_path.display())
+    } else {
+        output
+    }
 }
 ```
 
@@ -914,6 +1114,54 @@ fn build_exclude_args() -> Vec<String> {
 }
 ```
 
+### 4.11 `grep/mod.rs` — Búsqueda de Contenido en TUI (Modo Grep)
+
+**Responsabilidad:** Ejecutar `rg --vimgrep` contra `search_root` con el query actual, parsear resultados en `GrepMatch` y generar preview con `rg --context`.
+
+**API:**
+```rust
+/// Parsea la salida de rg --vimgrep (path:line:col:text) en GrepMatch[]
+pub fn parse_vimgrep(output: &str) -> Vec<GrepMatch>;
+
+/// Genera preview de un archivo con contexto alrededor del match.
+pub fn preview_match(file_path: &Path, query: &str) -> String;
+```
+
+**`parse_vimgrep`:**
+```rust
+pub fn parse_vimgrep(output: &str) -> Vec<GrepMatch> {
+    output
+        .lines()
+        .filter_map(|line| {
+            // Formato: "path:line:col:text"
+            let parts: Vec<&str> = line.splitn(4, ':').collect();
+            if parts.len() < 4 { return None; }
+            Some(GrepMatch {
+                file_path: parts[0].to_string(),
+                line_number: parts[1].parse().unwrap_or(0),
+                match_text: parts[3].to_string(),
+            })
+        })
+        .collect()
+}
+```
+
+**`preview_match`:**
+```rust
+pub fn preview_match(file_path: &Path, query: &str) -> String {
+    std::process::Command::new("rg")
+        .args(["--context=2", "--color=always", "--max-count", "50"])
+        .arg(query)
+        .arg(file_path)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default()
+}
+```
+
+**Nota:** La ejecución de `rg --vimgrep` se gestiona desde `app.rs::run_grep_search()`, que construye los argumentos según el estado de `show_dotfiles`/`show_winhidden`. Este módulo solo contiene las funciones de parseo y preview.
+
 ---
 
 ## 5. Shell Wrapper (PowerShell)
@@ -990,8 +1238,8 @@ Set-PSReadLineKeyHandler -Key Alt+C -ScriptBlock {
 | **P2: Walker** | `walker/mod.rs`, `zoxide/mod.rs` | Lista dirs/archivos con filtros. Tests. | 4h |
 | **P3: TUI Core** | `tui/app.rs`, `tui/events.rs`, `tui/ui.rs` | TUI funcional: lista, navegación flechas, Enter/Esc | 6h |
 | **P4: TUI Interactivo** | Fuzzy input, toggles, header, status bar | Ctrl+G/A/W/H, filtrado fuzzy con nucleo | 4h |
-| **P5: Preview** | `preview/mod.rs` | Panel derecho con eza/bat/git status | 3h |
-| **P6: Search -g** | `search/mod.rs` | Búsqueda global 3 fases con rg | 3h |
+| **P5: Preview** | `preview/mod.rs` | Panel derecho con eza/bat/git status + grep_preview() | 3h |
+| **P6: Search + Grep** | `search/mod.rs`, `grep/mod.rs` | Búsqueda global -g (3 fases rg) + modo Grep TUI (debounce, vimgrep, clamp root) | 5h |
 | **P7: Polish** | Error handling, shell wrapper, chezmoi, docs | Binario listo para producción | 3h |
 | **Total** | | | **~25h** |
 
@@ -1081,7 +1329,7 @@ cargo build --release && cp target/release/cdx-rs.exe ~/.local/bin/
 | Búsqueda global (cdx -g) | ✅ | ✅ P6 | |
 | Ayuda (cdx -h) | ✅ | ✅ P1 | |
 | Shortcuts ~ / ... | ✅ | ✅ P1 | |
-| Toggle Find↔Search (Ctrl+G) | ✅ | ✅ P4 | |
+| Toggle Find↔Search↔Grep (Ctrl+G) | ✅ | ✅ P4 | |
 | Toggle dotfiles (Ctrl+A) | ✅ | ✅ P4 | |
 | Toggle WinHidden (Ctrl+W) | ✅ | ✅ P4 | |
 | Ir a HOME (Ctrl+H) | ✅ | ✅ P4 | |
@@ -1099,6 +1347,11 @@ cargo build --release && cp target/release/cdx-rs.exe ~/.local/bin/
 | Shortcut Alt+C (PSReadLine) | ➕ nuevo | ✅ P7 | |
 | Query persiste tras cd .. (Esc) | ➕ nuevo | ✅ P3 | |
 | Selección resetea al primer item al escribir | ➕ nuevo | ✅ P4 | |
+| Modo Grep (contenido dentro de archivos) | ➕ nuevo | ✅ P6 | |
+| Grep: auto-desactivar WinHidden al entrar | ➕ nuevo | ✅ P6 | |
+| Grep: debounce 300ms typing → rg | ➕ nuevo | ✅ P6 | |
+| Grep: root clampeado a HOME | ➕ nuevo | ✅ P6 | |
+| Grep: preview con rg --context | ➕ nuevo | ✅ P6 | |
 
 ---
 
@@ -1112,6 +1365,7 @@ cargo build --release && cp target/release/cdx-rs.exe ~/.local/bin/
 | La preview regenerada en cada selección puede ser lenta | Debouncing: solo regenerar si la selección no ha cambiado en 50ms |
 | Ctrl+O (yazi) necesita manejar el terminal correctamente | `ratatui::restore()` limpia el terminal antes de spawn yazi. Al volver, el wrapper PS maneja el cd. |
 | Popup overlay en terminal < 80×24 se ve muy pequeño | `should_use_popup()` verifica el tamaño: si < 80×24, cae a full-screen sin atenuado. Mínimo fijo de 60 columnas si el usuario fuerza popup. |
+| `rg --vimgrep` lento en directorios con miles de archivos | `--max-depth=5` limita recursión. Home scope evita C:\. Timeout de 5s: si rg no termina, mostrar "Search timed out" y cancelar. |
 
 ---
 
