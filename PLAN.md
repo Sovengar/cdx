@@ -911,6 +911,8 @@ fn build_exclude_args() -> Vec<String> {
 
 ## 5. Shell Wrapper (PowerShell)
 
+### 5.1 Función cdx + Show-CdxResult
+
 Reemplaza las líneas 85-90 de `Microsoft.PowerShell_profile.ps1`:
 
 ```powershell
@@ -946,6 +948,30 @@ function Show-CdxResult {
     }
 }
 ```
+
+### 5.2 PSReadLine Shortcut (Alt+C)
+
+Añadir en el perfil tras la definición de `cdx`:
+
+```powershell
+# Alt+C → lanzar cdx TUI (como Ctrl+T de fzf pero para directorios)
+# Si hay texto en el buffer antes del cursor, se pasa como query pre-llenado
+Set-PSReadLineKeyHandler -Key Alt+C -ScriptBlock {
+    $line = $null; $cursor = $null
+    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+    $query = $line.Substring(0, $cursor).Trim()
+    [Microsoft.PowerShell.PSConsoleReadLine]::BeginningOfLine()
+    [Microsoft.PowerShell.PSConsoleReadLine]::KillLine()
+    if ($query) { cdx $query } else { cdx }
+    [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+}
+```
+
+**Por qué Alt+C:**
+- No tiene binding en PSReadLine.
+- No es señal de terminal (Ctrl+Q/XON podría tragarse la tecla en algunos terminales).
+- Es semántico: fzf en bash usa Alt+C para `cd` — mismo concepto aquí.
+- Libre de conflictos con los bindings existentes del perfil (Ctrl+T, Ctrl+G, Ctrl+R).
 
 ---
 
@@ -1063,6 +1089,7 @@ cargo build --release && cp target/release/cdx-rs.exe ~/.local/bin/
 | Search mode: abrir bat inline | ✅ | ✅ P4 | |
 | Esc = cd .. | ✅ | ✅ P3 | |
 | Ctrl+C = exit | ✅ | ✅ P3 | |
+| Shortcut Alt+C (PSReadLine) | ➕ nuevo | ✅ P7 | |
 
 ---
 
