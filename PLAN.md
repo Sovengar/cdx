@@ -409,7 +409,7 @@ pub fn get_list() -> Vec<PathBuf> {
 | Tecla | Acción | Código |
 |---|---|---|
 | `Enter` | En Find: cd al dir seleccionado. En Search: abrir archivo con bat. En ambos: regenerar items. | `app.handle_enter()` |
-| `Esc` | Subir al padre (`cd ..`). Si ya está en raíz → `should_quit = true`. | `app.handle_esc()` |
+| `Esc` | Subir al padre (`cd ..`). **El query NO se borra**, se re-filtra sobre los nuevos items. Si ya está en raíz → `should_quit = true`. | `app.handle_esc()` |
 | `Ctrl+C` | Salir (quedarse en dir actual). | `app.should_quit = true` |
 | `Ctrl+G` | Toggle Find ↔ Search. | `app.mode = !app.mode` |
 | `Ctrl+A` | Toggle dotfiles. | `app.show_dotfiles = !app.show_dotfiles` |
@@ -477,6 +477,7 @@ impl App {
     pub fn handle_enter(&mut self) { ... }
 
     /// Handle de Esc (subir al padre).
+    /// NO limpia el query — se re-filtra sobre los items del padre.
     pub fn handle_esc(&mut self) { ... }
 
     /// Handle de tecla genérica.
@@ -1090,6 +1091,7 @@ cargo build --release && cp target/release/cdx-rs.exe ~/.local/bin/
 | Esc = cd .. | ✅ | ✅ P3 | |
 | Ctrl+C = exit | ✅ | ✅ P3 | |
 | Shortcut Alt+C (PSReadLine) | ➕ nuevo | ✅ P7 | |
+| Query persiste tras cd .. (Esc) | ➕ nuevo | ✅ P3 | |
 
 ---
 
@@ -1103,3 +1105,98 @@ cargo build --release && cp target/release/cdx-rs.exe ~/.local/bin/
 | La preview regenerada en cada selección puede ser lenta | Debouncing: solo regenerar si la selección no ha cambiado en 50ms |
 | Ctrl+O (yazi) necesita manejar el terminal correctamente | `ratatui::restore()` limpia el terminal antes de spawn yazi. Al volver, el wrapper PS maneja el cd. |
 | Popup overlay en terminal < 80×24 se ve muy pequeño | `should_use_popup()` verifica el tamaño: si < 80×24, cae a full-screen sin atenuado. Mínimo fijo de 60 columnas si el usuario fuerza popup. |
+
+---
+
+## 11. V2 — Multi-word Path Scoring (REFERENCIA FUTURA)
+
+> ⚠️ **Esta sección es un borrador para v2.** No implementar en v1. Se revisitará cuando v1 sea funcional y se evaluará si sigue teniendo sentido.
+
+### Problema
+
+Cuando el usuario escribe **2+ palabras separadas** (ej: `vsocial work`), el fuzzy matching actual trata todo como un solo patrón. Queremos:
+
+- `work/vsocial` → score **altísimo** (ambas palabras son segmentos exactos, adyacentes)
+- `work/libs/vsocial` → score medio (segmentos exactos, NO adyacentes)
+- `dependencies/vsocial` → score normal (solo una palabra como segmento)
+- `dependencies/vsocial/work` → score alto (segmentos exactos, adyacentes, mismo orden)
+- `mywork/vsocial` → score bajo (fuzzy + un segmento)
+
+### Algoritmo propuesto
+
+```rust
+fn score_query(query: &str, haystack: &str, matcher: &mut Matcher) -> Option<u16> {
+    let tokens: Vec<&str> = query.split_whitespace().collect();
+
+    if tokens.len() == 1 {
+        // Una palabra → fuzzy normal con match_paths
+        let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
+        return pattern.score(Utf32Str::new(haystack, &mut matcher.config.normalize), matcher);
+    }
+
+    // Multi-token: cada token DEBE matchear
+    let segments: Vec<&str> = haystack.split('/').collect();
+    let mut total: u32 = 0;
+    let mut matched_segments: Vec<usize> = Vec::new();
+
+    for token in &tokens {
+        // Priority 1: token es un segmento exacto de la ruta
+        if let Some(pos) = segments.iter().position(|s| *s == *token) {
+            total += 200;          // Segment exact bonus
+            matched_segments.push(pos);
+            continue;
+        }
+
+        // Priority 2: fuzzy match contra el haystack completo
+        let pattern = Pattern::parse(token, CaseMatching::Ignore, Normalization::Smart);
+        match pattern.score(
+            Utf32Str::new(haystack, &mut matcher.config.normalize),
+            matcher,
+        ) {
+            Some(score) => total += score as u32,
+            None => return None,   // Si un token no matchea → NO match
+        }
+    }
+
+    // Bonus de adyacencia: segmentos consecutivos en la ruta
+    if matched_segments.len() >= 2 {
+        matched_segments.sort();
+        if matched_segments.windows(2).any(|w| w[1] == w[0] + 1) {
+            total += 150;
+        }
+    }
+
+    // Bonus completo: todos los tokens como segmentos exactos
+    if matched_segments.len() == tokens.len() {
+        total += 100;
+    }
+
+    Some((total as u16).min(u16::MAX))
+}
+```
+
+### Tabla de scores de ejemplo
+
+| Query | Haystack | Segment exact | Adyacencia | Todos | Total |
+|---|---|---|---|---|---|
+| `vsocial work` | `work/vsocial` | 200+200 | +150 | +100 | **650** |
+| `vsocial work` | `work/libs/vsocial` | 200+200 | +0 | +100 | **500** |
+| `vsocial work` | `vscode/settings/work` | 0+200 | +0 | +0 | **~280** |
+| `vsocial` | `work/vsocial` | +200 | n/a | n/a | **200** |
+| `vsocial work` | `dependencies/libs` | n/a | n/a | n/a | **no match** |
+
+### Dependencia entre v1 y v2
+
+Feature 1 (query persistente) y Feature 2 (multi-word) **no chocan**. De hecho se potencian:
+
+1. Usuario escribe `vsocial` → ve resultados con ruido
+2. Esc → sube al padre, query `vsocial` sigue ahí (Feature 1, v1)
+3. Añade `work` → query = `vsocial work` → Feature 2 (v2) lo posiciona en el top
+4. Enter → navega directo
+
+### Re-evaluación
+
+Cuando v1 esté funcional, revisar:
+- ¿El fuzzy matching simple con match_paths de nucleo ya cubre este caso aceptablemente?
+- ¿La adyacencia de segmentos realmente mejora la UX o es overengineering?
+- ¿El coste computacional (tokenizar ± split + multiples pattern.score) afecta al rendimiento en directorios con miles de items?
