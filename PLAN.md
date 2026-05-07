@@ -144,6 +144,10 @@ pub struct App {
     pub cursor_pos: usize,             // Posición del cursor en el input
     pub focus: Focus,                  // List | Input
 
+    // ── Popup / Overlay ──
+    pub popup_width_pct: u16,          // % del terminal ancho (default 80)
+    pub popup_height_pct: u16,         // % del terminal alto (default 80)
+
     // ── Salida ──
     pub should_quit: bool,
     pub exit_action: ExitAction,       // Qué hacer al salir
@@ -480,6 +484,12 @@ impl App {
 
     /// Merge de zoxide con items de walker.
     fn merge_zoxide(&mut self, walker_items: Vec<DirEntryItem>) -> Vec<DirEntryItem> { ... }
+
+    /// Determina si la TUI debe renderizarse como popup overlay.
+    /// Cae a full-screen si el terminal es menor a 80×24.
+    fn should_use_popup(&self, term: Rect) -> bool {
+        term.width >= 80 && term.height >= 24
+    }
 }
 ```
 
@@ -519,39 +529,115 @@ pub fn apply_query(&mut self) {
 }
 ```
 
-### 4.8 `tui/ui.rs` — Renderizado con Ratatui
+### 4.8 `tui/ui.rs` — Renderizado Popup Overlay con Ratatui
 
-**Layout de 5 zonas:**
+#### Estrategia
+
+La TUI se renderiza como un **popup centrado** que ocupa ~80% del terminal, con el fondo de la terminal atenuado detrás. Si el terminal es muy pequeño (< 80×24), cae a **full-screen** sin atenuar.
+
+**Representación visual:**
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  (fondo atenuado — se ve el prompt/historial detrás)      │
+│                                                           │
+│      ┌────────── cdx ───────────────────────────┐         │
+│      │ Enter (cd) | Esc (..) | Ctrl+G toggle    │         │
+│      ├────────────────┬─────────────────────────┤         │
+│      │ ★ proyectos    │ === CONTENTS ===        │         │
+│      │   src/         │ src/  Cargo.toml        │         │
+│      │   docs/        │                          │         │
+│      │ > target/      │ === GIT STATUS ===      │         │
+│      │   .git/        │ Clean                    │         │
+│      ├────────────────┴─────────────────────────┤         │
+│      │ ~/dev/proyecto  | Find  | dotfiles: ✗   │         │
+│      ├──────────────────────────────────────────┤         │
+│      │ > proj                                    │         │
+│      └──────────────────────────────────────────┘         │
+│                                                           │
+│  (fondo atenuado)                                         │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### Función principal `render`
+
 ```rust
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let outer = Layout::vertical([
-        Constraint::Length(2),   // Header
-        Constraint::Fill(1),     // Main (List + Preview)
-        Constraint::Length(1),   // Status bar
-        Constraint::Length(1),   // Query input
-    ]).split(frame.area());
+    let term = frame.area();
 
-    let main = Layout::horizontal([
-        Constraint::Percentage(60),  // List
-        Constraint::Percentage(40),  // Preview
-    ]).split(outer[1]);
+    // ── Calcular área del popup ──
+    let (outer, main) = if app.should_use_popup(term) {
+        let w = std::cmp::min(term.width * app.popup_width_pct / 100, 120);
+        let h = std::cmp::min(term.height * app.popup_height_pct / 100, 40);
+        let x = (term.width - w) / 2;
+        let y = (term.height - h) / 2;
+        let popup = Rect::new(x, y, w, h);
 
+        // Fondo atenuado sobre toda la pantalla
+        frame.render_widget(
+            Block::default()
+                .style(Style::default().bg(Color::DarkGray)),
+            term,
+        );
+
+        // Limpiar el área del popup
+        frame.render_widget(Clear, popup);
+
+        // Borde del popup con título flotante
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" cdx ")
+            .title_alignment(Alignment::Center);
+
+        frame.render_widget(block.clone(), popup);
+        let inner = block.inner(popup);
+
+        layout_inner(inner)
+    } else {
+        // Full-screen fallback (terminal < 80×24)
+        layout_inner(term)
+    };
+
+    // ── Renderizar widgets internos ──
     render_header(frame, outer[0], app);
     render_list(frame, main[0], app);
     render_preview(frame, main[1], app);
     render_status(frame, outer[2], app);
     render_input(frame, outer[3], app);
 }
+
+/// Divide el área interna en 4 filas: header, contenido, status, input.
+/// Contenido se subdivide en lista (60%) y preview (40%).
+fn layout_inner(area: Rect) -> ([Rect; 4], [Rect; 2]) {
+    let rows = Layout::vertical([
+        Constraint::Length(1),   // Header: "Enter (cd) | Esc (..) | Ctrl+G ..."
+        Constraint::Fill(1),     // Main: Lista + Preview
+        Constraint::Length(1),   // Status: "~/dev | Find | dotfiles: ✗"
+        Constraint::Length(1),   // Query: "> proj"
+    ])
+    .split(area);
+
+    let cols = Layout::horizontal([
+        Constraint::Percentage(60),  // Lista
+        Constraint::Percentage(40),  // Preview
+    ])
+    .split(rows[1]);
+
+    (rows, cols)
+}
 ```
 
-**List render:**
+#### `render_list` — Panel izquierdo con lista navegable
+
 ```rust
 fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
-    let items: Vec<ListItem> = app.filtered_indices.iter()
+    let items: Vec<ListItem> = app.filtered_indices
+        .iter()
         .filter_map(|&i| app.items.get(i))
         .map(|item| {
             let style = if item.is_zoxide {
-                Style::default().fg(Color::Yellow)
+                Style::default().fg(Color::Yellow)  // ★ items amarillo
             } else {
                 Style::default()
             };
@@ -560,11 +646,102 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
         .collect();
 
     let list = List::new(items)
-        .block(Block::bordered().title(""))
         .highlight_style(Style::default().reversed())
         .highlight_symbol("▶ ");
 
     frame.render_stateful_widget(list, area, &mut app.list_state);
+}
+```
+
+#### `render_header` — Línea superior de atajos
+
+```rust
+fn render_header(frame: &mut Frame, area: Rect, app: &mut App) {
+    let label = match app.mode {
+        Mode::Find => "Enter (cd) | Esc (..) | Ctrl+G (Search) | Ctrl+O (yazi)",
+        Mode::Search => "Enter (open) | Esc (..) | Ctrl+G (Find) | Ctrl+H (home)",
+    };
+    frame.render_widget(
+        Paragraph::new(label).style(Style::default().fg(Color::Cyan)),
+        area,
+    );
+}
+```
+
+#### `render_status` — Barra de estado
+
+```rust
+fn render_status(frame: &mut Frame, area: Rect, app: &mut App) {
+    let path = display_path(&app.current_dir);
+    let mode = match app.mode {
+        Mode::Find => "Find",
+        Mode::Search => "Search",
+        Mode::Results => "Results",
+    };
+    let dot = if app.show_dotfiles { "✓" } else { "✗" };
+    let win = if app.show_winhidden { "✓" } else { "✗" };
+
+    let text = format!(" {} | {} | dotfiles: {} | WinHidden: {}", path, mode, dot, win);
+    frame.render_widget(
+        Paragraph::new(text).style(Style::default().fg(Color::DarkGray)),
+        area,
+    );
+}
+```
+
+#### `render_input` — Campo de búsqueda fuzzy
+
+```rust
+fn render_input(frame: &mut Frame, area: Rect, app: &mut App) {
+    let prefix = if app.focus == Focus::Input { "> " } else { "> " };
+    let text = format!("{}{}", prefix, app.query);
+    let style = match app.focus {
+        Focus::Input => Style::default().fg(Color::Green),
+        Focus::List => Style::default().fg(Color::White),
+    };
+    frame.render_widget(Paragraph::new(text).style(style), area);
+}
+```
+
+#### `render_preview` — Panel derecho (contenido dinámico)
+
+```rust
+fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let inner = block.inner(area);
+
+    // Si no hay selección, mostrar placeholder
+    if app.preview_content.is_empty() {
+        frame.render_widget(
+            Paragraph::new(" (select an item) ")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center),
+            inner,
+        );
+        frame.render_widget(block, area);
+        return;
+    }
+
+    let lines: Vec<Line> = app.preview_content
+        .lines()
+        .map(|line| {
+            // Resaltar encabezados === SECTION ===
+            if line.starts_with("===") {
+                Line::from(Span::styled(line, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+            } else {
+                Line::from(Span::raw(line))
+            }
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(lines)
+        .scroll((app.preview_scroll as u16, 0));
+
+    frame.render_widget(block, area);
+    frame.render_widget(paragraph, inner);
 }
 ```
 
@@ -898,3 +1075,4 @@ cargo build --release && cp target/release/cdx-rs.exe ~/.local/bin/
 | nucleo fuzzy matching puede diferir del comportamiento de fzf | Mismo algoritmo (Smith-Waterman). Testear con queries complejos. Si difiere, `Pattern::parse` permite ajustar comportamiento. |
 | La preview regenerada en cada selección puede ser lenta | Debouncing: solo regenerar si la selección no ha cambiado en 50ms |
 | Ctrl+O (yazi) necesita manejar el terminal correctamente | `ratatui::restore()` limpia el terminal antes de spawn yazi. Al volver, el wrapper PS maneja el cd. |
+| Popup overlay en terminal < 80×24 se ve muy pequeño | `should_use_popup()` verifica el tamaño: si < 80×24, cae a full-screen sin atenuado. Mínimo fijo de 60 columnas si el usuario fuerza popup. |
