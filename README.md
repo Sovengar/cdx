@@ -63,15 +63,12 @@ function cdx {
 }
 ```
 
-For a PSReadLine keybinding (`Alt+C`) to launch cdx from anywhere:
+For a PSReadLine keybinding (`Ctrl+Shift+G`) to launch cdx from anywhere:
 
 ```powershell
-Set-PSReadLineKeyHandler -Chord Alt+c -ScriptBlock {
-    $result = & "$env:USERPROFILE\.local\bin\cdx.exe"
-    if ($LASTEXITCODE -eq 0 -and $result) {
-        Set-Location $result
-        [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
-    }
+Set-PSReadLineKeyHandler -Key Ctrl+Shift+G -ScriptBlock {
+    [Microsoft.PowerShell.PSConsoleReadLine]::Insert("cdx")
+    [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
 }
 ```
 
