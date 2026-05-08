@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use super::app::{App, Mode};
+use super::app::{App, Focus, Mode};
 use crate::walker::DirEntryItem;
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -294,10 +294,15 @@ fn render_input(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
+    let focus_fg = if app.focus == Focus::Preview {
+        Color::Yellow
+    } else {
+        header_fg()
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(header_fg()))
+        .border_style(Style::default().fg(focus_fg))
         .title(" Preview ");
 
     let inner = block.inner(area);
