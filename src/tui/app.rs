@@ -372,6 +372,12 @@ impl App {
             KeyCode::Enter => {
                 self.handle_enter();
             }
+            KeyCode::PageDown => {
+                self.preview_scroll = self.preview_scroll.saturating_add(10);
+            }
+            KeyCode::PageUp => {
+                self.preview_scroll = self.preview_scroll.saturating_sub(10);
+            }
             KeyCode::Esc => {
                 self.handle_esc();
             }

@@ -67,8 +67,8 @@ fn layout_inner(area: Rect) -> ([Rect; 4], [Rect; 2]) {
     .split(area);
 
     let cols = Layout::horizontal([
-        Constraint::Percentage(60),
-        Constraint::Percentage(40),
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
     ])
     .split(rows[2]);
 

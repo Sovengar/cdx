@@ -1,7 +1,9 @@
+use std::io::stdout;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
+use crossterm::execute;
 use ratatui::text::Text;
 
 use super::app::{App, ExitAction, Mode};
@@ -9,6 +11,8 @@ use super::app::{App, ExitAction, Mode};
 pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
     let mut terminal = ratatui::init();
     let mut app = App::new(initial_query)?;
+
+    execute!(stdout(), crossterm::event::EnableMouseCapture)?;
 
     app.refresh_items();
 
@@ -24,10 +28,27 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
         };
 
         if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    app.handle_key(key);
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind == KeyEventKind::Press {
+                        app.handle_key(key);
+                    }
                 }
+                Event::Mouse(mouse) => {
+                    if app.preview_text.lines.is_empty() {
+                        continue;
+                    }
+                    match mouse.kind {
+                        MouseEventKind::ScrollDown => {
+                            app.preview_scroll = app.preview_scroll.saturating_add(3);
+                        }
+                        MouseEventKind::ScrollUp => {
+                            app.preview_scroll = app.preview_scroll.saturating_sub(3);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
         } else if app.grep_pending && app.mode == Mode::Grep {
             app.run_grep_search();
@@ -36,6 +57,7 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
         }
 
         if app.preview_dirty {
+            app.preview_scroll = 0;
             if let Some(idx) = app.list_state.selected() {
                 if let Some(&item_idx) = app.filtered_indices.get(idx) {
                     if let Some(item) = app.items.get(item_idx) {
@@ -53,6 +75,7 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
         }
     }
 
+    execute!(stdout(), crossterm::event::DisableMouseCapture)?;
     ratatui::restore();
 
     if let ExitAction::SpawnYazi(path) = &app.exit_action {
