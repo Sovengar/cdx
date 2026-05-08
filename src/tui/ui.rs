@@ -123,6 +123,14 @@ fn style_for(item: &DirEntryItem) -> Style {
 }
 
 fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(header_fg()))
+        .title(" Files ");
+
+    let inner = block.inner(area);
+
     let items: Vec<ListItem> = app
         .filtered_indices
         .iter()
@@ -139,7 +147,8 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▶ ");
 
-    frame.render_stateful_widget(list, area, &mut app.list_state);
+    frame.render_widget(block, area);
+    frame.render_stateful_widget(list, inner, &mut app.list_state);
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -256,8 +265,10 @@ fn render_input(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
-        .borders(Borders::LEFT)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(header_fg()))
+        .title(" Preview ");
 
     let inner = block.inner(area);
 
