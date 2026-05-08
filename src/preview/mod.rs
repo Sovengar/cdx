@@ -60,8 +60,9 @@ fn preview_directory(path: &Path) -> Text<'static> {
         .args([
             "--icons=always",
             "--color=always",
-            "--grid",
             "--group-directories-first",
+            "--grid",
+            "--width=40",
         ])
         .arg(path)
         .output()
