@@ -52,6 +52,7 @@ pub struct App {
 
     pub zoxide_cache: Vec<PathBuf>,
     pub preview_text: Text<'static>,
+    pub preview_contents: Text<'static>,
     pub preview_dirty: bool,
     pub preview_scroll: u64,
 
@@ -100,6 +101,7 @@ impl App {
 
             zoxide_cache,
             preview_text: Text::default(),
+            preview_contents: Text::default(),
             preview_dirty: false,
             preview_scroll: 0,
 

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEventKind};
+use ratatui::text::Text;
 
 use super::app::{App, ExitAction, Mode};
 
@@ -39,6 +40,12 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
                 if let Some(&item_idx) = app.filtered_indices.get(idx) {
                     if let Some(item) = app.items.get(item_idx) {
                         app.preview_text = crate::preview::generate(&app, item);
+                        if item.is_dir {
+                            let full_path = app.current_dir.join(&item.rel_path);
+                            app.preview_contents = crate::preview::directory_contents(&full_path);
+                        } else {
+                            app.preview_contents = Text::default();
+                        }
                     }
                 }
             }

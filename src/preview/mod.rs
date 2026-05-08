@@ -16,7 +16,7 @@ pub fn generate(app: &App, item: &DirEntryItem) -> Text<'static> {
     let full_path = app.current_dir.join(&item.rel_path);
 
     if item.is_dir {
-        preview_directory(&full_path)
+        preview_directory(&full_path, app.show_dotfiles, app.show_winhidden)
     } else {
         preview_file(&full_path)
     }
@@ -51,27 +51,103 @@ fn header_line(label: &str) -> Line<'static> {
     ))
 }
 
-fn preview_directory(path: &Path) -> Text<'static> {
+fn build_tree_lines(
+    path: &Path,
+    max_depth: usize,
+    current_depth: usize,
+    prefix: &str,
+    show_dotfiles: bool,
+    show_winhidden: bool,
+) -> Vec<Line<'static>> {
+    let mut items: Vec<(String, bool)> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            if crate::config::EXCLUDE_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            if !show_dotfiles && name.starts_with('.') {
+                continue;
+            }
+            if !show_winhidden {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    if let Ok(meta) = entry.metadata() {
+                        if (meta.file_attributes() & 0x2) != 0 {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            let is_dir = entry.file_type().map_or(false, |t| t.is_dir());
+            items.push((name, is_dir));
+        }
+    }
+
+    items.sort_by(|a, b| {
+        if a.1 != b.1 {
+            b.1.cmp(&a.1)
+        } else {
+            a.0.cmp(&b.0)
+        }
+    });
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let count = items.len();
+
+    for (i, (name, is_dir)) in items.iter().enumerate() {
+        let is_last = i == count - 1;
+        let branch = if is_last { "└── " } else { "├── " };
+        let icon = if *is_dir { "\u{f07b}" } else { icon_for_name(name) };
+        let content = format!("{}{} {}", branch, icon, name);
+
+        let style = if *is_dir {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", prefix, content),
+            style,
+        )));
+
+        if *is_dir && current_depth < max_depth {
+            let child_prefix = if is_last {
+                format!("{}    ", prefix)
+            } else {
+                format!("{}│   ", prefix)
+            };
+            lines.extend(build_tree_lines(
+                &path.join(name),
+                max_depth,
+                current_depth + 1,
+                &child_prefix,
+                show_dotfiles,
+                show_winhidden,
+            ));
+        }
+    }
+
+    lines
+}
+
+fn preview_directory(path: &Path, show_dotfiles: bool, show_winhidden: bool) -> Text<'static> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    lines.push(header_line("=== CONTENTS ==="));
-
-    match std::process::Command::new("eza")
-        .args([
-            "--icons=always",
-            "--color=always",
-            "--group-directories-first",
-            "--grid",
-            "--width=40",
-        ])
-        .arg(path)
-        .output()
-    {
-        Ok(out) => match out.stdout.into_text() {
-            Ok(text) => lines.extend(text.lines),
-            Err(_) => lines.extend(fallback_read_dir(path)),
-        },
-        Err(_) => lines.extend(fallback_read_dir(path)),
+    lines.push(header_line("=== TREE ==="));
+    let tree = build_tree_lines(path, 2, 0, "", show_dotfiles, show_winhidden);
+    if tree.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " (empty)".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        lines.extend(tree);
     }
 
     lines.push(Line::from(""));
@@ -114,6 +190,26 @@ fn preview_directory(path: &Path) -> Text<'static> {
     }
 
     Text::from(lines)
+}
+
+pub fn directory_contents(path: &Path) -> Text<'static> {
+    match std::process::Command::new("eza")
+        .args([
+            "--icons=always",
+            "--color=always",
+            "--group-directories-first",
+            "--grid",
+            "--width=40",
+        ])
+        .arg(path)
+        .output()
+    {
+        Ok(out) => match out.stdout.into_text() {
+            Ok(text) => text,
+            Err(_) => Text::from(fallback_read_dir(path)),
+        },
+        Err(_) => Text::from(fallback_read_dir(path)),
+    }
 }
 
 fn fallback_read_dir(path: &Path) -> Vec<Line<'static>> {

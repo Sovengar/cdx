@@ -147,8 +147,31 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▶ ");
 
-    frame.render_widget(block, area);
-    frame.render_stateful_widget(list, inner, &mut app.list_state);
+    if !app.preview_contents.lines.is_empty() {
+        let chunks = Layout::vertical([
+            Constraint::Fill(3),
+            Constraint::Length(1),
+            Constraint::Fill(2),
+        ])
+        .split(inner);
+
+        frame.render_widget(block, area);
+        frame.render_stateful_widget(list, chunks[0], &mut app.list_state);
+
+        let sep = Line::from(Span::styled(
+            "─".repeat(chunks[1].width as usize),
+            Style::default().fg(Color::DarkGray),
+        ));
+        frame.render_widget(Paragraph::new(sep), chunks[1]);
+
+        frame.render_widget(
+            Paragraph::new(app.preview_contents.clone()),
+            chunks[2],
+        );
+    } else {
+        frame.render_widget(block, area);
+        frame.render_stateful_widget(list, inner, &mut app.list_state);
+    }
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
