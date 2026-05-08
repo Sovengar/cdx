@@ -323,8 +323,27 @@ fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
 
-    let paragraph = Paragraph::new(app.preview_text.clone())
-        .scroll((app.preview_scroll as u16, 0));
+    let mut text = app.preview_text.clone();
+    if app.focus == Focus::Preview && !app.preview_entries.is_empty() {
+        if let Some(entry) = app.preview_entries.get(app.preview_selection) {
+            if entry.line_index < text.lines.len() {
+                let line = &text.lines[entry.line_index];
+                let spans: Vec<Span> = line
+                    .spans
+                    .iter()
+                    .map(|s| {
+                        Span::styled(
+                            s.content.clone(),
+                            s.style.add_modifier(Modifier::REVERSED),
+                        )
+                    })
+                    .collect();
+                text.lines[entry.line_index] = Line::from(spans);
+            }
+        }
+    }
+
+    let paragraph = Paragraph::new(text).scroll((app.preview_scroll as u16, 0));
 
     frame.render_widget(block, area);
     frame.render_widget(paragraph, inner);

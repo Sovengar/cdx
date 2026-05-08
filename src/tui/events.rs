@@ -58,6 +58,8 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
 
         if app.preview_dirty {
             app.preview_scroll = 0;
+            app.preview_entries.clear();
+            app.preview_selection = 0;
             if let Some(idx) = app.list_state.selected() {
                 if let Some(&item_idx) = app.filtered_indices.get(idx) {
                     if let Some(item) = app.items.get(item_idx) {
@@ -65,6 +67,7 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
                         if item.is_dir {
                             let full_path = app.current_dir.join(&item.rel_path);
                             app.preview_contents = crate::preview::directory_contents(&full_path);
+                            app.preview_entries = crate::preview::generate_entries(&app, item);
                         } else {
                             app.preview_contents = Text::default();
                         }

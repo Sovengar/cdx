@@ -5,6 +5,7 @@ use nucleo_matcher::{Matcher, Config, Utf32Str};
 use ratatui::text::Text;
 use ratatui::widgets::ListState;
 
+use crate::preview::PreviewEntry;
 use crate::walker::DirEntryItem;
 use crate::zoxide;
 
@@ -62,6 +63,8 @@ pub struct App {
     pub preview_contents: Text<'static>,
     pub preview_dirty: bool,
     pub preview_scroll: u64,
+    pub preview_entries: Vec<PreviewEntry>,
+    pub preview_selection: usize,
 
     pub matcher: Matcher,
     pub scratch: Vec<char>,
@@ -112,6 +115,8 @@ impl App {
             preview_contents: Text::default(),
             preview_dirty: false,
             preview_scroll: 0,
+            preview_entries: Vec::new(),
+            preview_selection: 0,
 
             matcher: Matcher::new(Config::DEFAULT.match_paths()),
             scratch: Vec::new(),
@@ -330,41 +335,66 @@ impl App {
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
 
-        match key.code {
-            KeyCode::Up => {
-                let i = self.list_state.selected().unwrap_or(0);
-                if i > 0 {
-                    self.list_state.select(Some(i - 1));
-                    self.preview_dirty = true;
+        match self.focus {
+            Focus::List => {
+                match key.code {
+                    KeyCode::Up => self.list_nav_up(),
+                    KeyCode::Down => self.list_nav_down(),
+                    KeyCode::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(10),
+                    KeyCode::PageDown => self.preview_scroll = self.preview_scroll.saturating_add(10),
+                    KeyCode::Enter => self.handle_enter(),
+                    _ => self.handle_list_key(key),
                 }
             }
-            KeyCode::Down => {
-                let i = self.list_state.selected().unwrap_or(0);
-                if i + 1 < self.filtered_indices.len() {
-                    self.list_state.select(Some(i + 1));
-                    self.preview_dirty = true;
-                }
-            }
-            KeyCode::PageUp => {
-                self.preview_scroll = self.preview_scroll.saturating_sub(10);
-            }
-            KeyCode::PageDown => {
-                self.preview_scroll = self.preview_scroll.saturating_add(10);
-            }
-            KeyCode::Enter => {
-                self.handle_enter();
-            }
-            _ => match self.focus {
-                Focus::List => self.handle_list_key(key),
-                Focus::Preview => self.handle_preview_key(key),
-            },
+            Focus::Preview => self.handle_preview_key(key),
         }
     }
 
+    fn list_nav_up(&mut self) {
+        let i = self.list_state.selected().unwrap_or(0);
+        if i > 0 {
+            self.list_state.select(Some(i - 1));
+            self.preview_dirty = true;
+        }
+    }
+
+    fn list_nav_down(&mut self) {
+        let i = self.list_state.selected().unwrap_or(0);
+        if i + 1 < self.filtered_indices.len() {
+            self.list_state.select(Some(i + 1));
+            self.preview_dirty = true;
+        }
+    }
     fn handle_preview_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         match key.code {
+            KeyCode::Up => {
+                if self.preview_selection > 0 {
+                    self.preview_selection -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.preview_selection + 1 < self.preview_entries.len() {
+                    self.preview_selection += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(entry) = self.preview_entries.get(self.preview_selection) {
+                    if entry.is_dir && entry.full_path.is_dir() {
+                        self.current_dir = entry.full_path.clone();
+                        self.query.clear();
+                        self.cursor_pos = 0;
+                        self.preview_text = Text::default();
+                        self.preview_entries.clear();
+                        self.preview_selection = 0;
+                        self.focus = Focus::List;
+                        self.invalidate_find_cache();
+                        self.refresh_items();
+                        self.preview_dirty = true;
+                    }
+                }
+            }
             KeyCode::Left | KeyCode::Esc => {
                 self.focus = Focus::List;
             }

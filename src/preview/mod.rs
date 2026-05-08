@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ansi_to_tui::IntoText as _;
 use ratatui::style::{Color, Modifier, Style};
@@ -7,6 +7,15 @@ use ratatui::text::{Line, Span, Text};
 
 use crate::tui::app::{App, Mode};
 use crate::walker::DirEntryItem;
+
+#[derive(Debug, Clone)]
+pub struct PreviewEntry {
+    #[allow(dead_code)]
+    pub name: String,
+    pub full_path: PathBuf,
+    pub is_dir: bool,
+    pub line_index: usize,
+}
 
 pub fn generate(app: &App, item: &DirEntryItem) -> Text<'static> {
     if app.mode == Mode::Grep {
@@ -51,18 +60,35 @@ fn header_line(label: &str) -> Line<'static> {
     ))
 }
 
-fn build_tree_lines(
+pub fn generate_entries(app: &App, item: &DirEntryItem) -> Vec<PreviewEntry> {
+    if app.mode != Mode::Grep && item.is_dir {
+        let full_path = app.current_dir.join(&item.rel_path);
+        let mut entries = Vec::new();
+        let mut line_counter = 0;
+        build_tree_with_entries(&full_path, 2, 0, "", app.show_dotfiles, app.show_winhidden, &mut entries, &mut line_counter);
+        for entry in &mut entries {
+            entry.line_index += 1;
+        }
+        entries
+    } else {
+        Vec::new()
+    }
+}
+
+fn build_tree_with_entries(
     path: &Path,
     max_depth: usize,
     current_depth: usize,
     prefix: &str,
     show_dotfiles: bool,
     show_winhidden: bool,
+    out_entries: &mut Vec<PreviewEntry>,
+    line_counter: &mut usize,
 ) -> Vec<Line<'static>> {
     let mut items: Vec<(String, bool)> = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
+    if let Ok(dir_entries) = fs::read_dir(path) {
+        for entry in dir_entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
 
             if crate::config::EXCLUDE_DIRS.contains(&name.as_str()) {
@@ -133,24 +159,50 @@ fn build_tree_lines(
             style,
         )));
 
+        let entry_path = path.join(name);
+
+        if *is_dir {
+            out_entries.push(PreviewEntry {
+                name: name.clone(),
+                full_path: entry_path.clone(),
+                is_dir: true,
+                line_index: *line_counter,
+            });
+        }
+
+        *line_counter += 1;
+
         if *is_dir && current_depth < max_depth {
             let child_prefix = if is_last {
                 format!("{}    ", prefix)
             } else {
                 format!("{}│   ", prefix)
             };
-            lines.extend(build_tree_lines(
-                &path.join(name),
+            lines.extend(build_tree_with_entries(
+                &entry_path,
                 max_depth,
                 current_depth + 1,
                 &child_prefix,
                 show_dotfiles,
                 show_winhidden,
+                out_entries,
+                line_counter,
             ));
         }
     }
 
     lines
+}
+
+fn build_tree_lines(
+    path: &Path,
+    max_depth: usize,
+    current_depth: usize,
+    prefix: &str,
+    show_dotfiles: bool,
+    show_winhidden: bool,
+) -> Vec<Line<'static>> {
+    build_tree_with_entries(path, max_depth, current_depth, prefix, show_dotfiles, show_winhidden, &mut Vec::new(), &mut 0)
 }
 
 fn preview_directory(path: &Path, show_dotfiles: bool, show_winhidden: bool) -> Text<'static> {
