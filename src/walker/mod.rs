@@ -2,7 +2,7 @@ use std::path::Path;
 
 use ignore::WalkBuilder;
 
-use crate::config::{EXCLUDE_DIRS, EXCLUDE_WIN_DIRS, MAX_SECONDARY_DEPTH};
+use crate::config;
 
 #[derive(Debug, Clone)]
 pub struct DirEntryItem {
@@ -15,10 +15,10 @@ pub struct DirEntryItem {
 
 fn entry_filter(entry: &ignore::DirEntry, show_dotfiles: bool, show_winhidden: bool) -> bool {
     let name = entry.file_name().to_string_lossy();
-    if EXCLUDE_DIRS.contains(&name.as_ref()) {
+    if config::get().exclude_dirs.contains(&name.as_ref()) {
         return false;
     }
-    if !show_winhidden && EXCLUDE_WIN_DIRS.contains(&name.as_ref()) {
+    if !show_winhidden && config::get().exclude_win_dirs.contains(&name.as_ref()) {
         return false;
     }
     if !show_dotfiles && name.starts_with('.') {
@@ -52,10 +52,10 @@ pub fn list_files(
     builder.require_git(false);
     builder.filter_entry(move |entry| {
         let name = entry.file_name().to_string_lossy();
-        if EXCLUDE_DIRS.contains(&name.as_ref()) {
+        if config::get().exclude_dirs.contains(&name.as_ref()) {
             return false;
         }
-        if !show_winhidden && EXCLUDE_WIN_DIRS.contains(&name.as_ref()) {
+        if !show_winhidden && config::get().exclude_win_dirs.contains(&name.as_ref()) {
             return false;
         }
         if !show_dotfiles && name.starts_with('.') {
@@ -86,7 +86,7 @@ pub fn recursive_dir_search(
     show_winhidden: bool,
 ) -> Vec<DirEntryItem> {
     let mut builder = WalkBuilder::new(root);
-    builder.max_depth(Some(MAX_SECONDARY_DEPTH));
+    builder.max_depth(Some(config::get().max_secondary_depth));
     builder.hidden(!show_dotfiles);
     builder.require_git(false);
     builder.filter_entry(move |entry| entry_filter(entry, show_dotfiles, show_winhidden));

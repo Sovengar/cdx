@@ -6,6 +6,7 @@ use nucleo_matcher::{Matcher, Config, Utf32Str};
 use ratatui::text::Text;
 use ratatui::widgets::ListState;
 
+use crate::config;
 use crate::preview::PreviewEntry;
 use crate::walker::DirEntryItem;
 use crate::zoxide;
@@ -82,11 +83,13 @@ pub struct App {
 
     pub tick: u64,
     pub last_esc_time: Option<Instant>,
+    pub edit_pending: bool,
 }
 
 impl App {
     pub fn new(initial_query: Option<String>) -> anyhow::Result<Self> {
         let current_dir = std::env::current_dir()?;
+        let cfg = config::get();
         let zoxide_cache = zoxide::get_list();
 
         let query = initial_query.unwrap_or_default();
@@ -99,15 +102,15 @@ impl App {
 
             mode: Mode::Find,
             focus: Focus::List,
-            show_dotfiles: false,
-            show_winhidden: false,
+            show_dotfiles: cfg.show_dotfiles,
+            show_winhidden: cfg.show_winhidden,
 
             list_state: ListState::default(),
             query,
             cursor_pos,
 
-            popup_width_pct: 80,
-            popup_height_pct: 80,
+            popup_width_pct: cfg.popup_width_pct,
+            popup_height_pct: cfg.popup_height_pct,
 
             should_quit: false,
             exit_action: ExitAction::JustExit,
@@ -126,15 +129,16 @@ impl App {
             grep_pending: false,
             grep_results: Vec::new(),
             grep_search_root: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
-            grep_debounce_ms: 300,
+            grep_debounce_ms: cfg.grep_debounce_ms,
 
             find_pending: false,
-            find_debounce_ms: 150,
+            find_debounce_ms: cfg.find_debounce_ms,
             find_cache: Vec::new(),
             find_cache_root: PathBuf::new(),
 
             tick: 0,
             last_esc_time: None,
+            edit_pending: false,
         })
     }
 
@@ -198,11 +202,65 @@ impl App {
             return;
         }
 
-        if self.mode == Mode::Find {
-            self.find_pending = true;
+        self.find_pending = true;
+    }
+
+    pub fn run_find_search(&mut self) {
+        self.find_pending = false;
+
+        if self.query.is_empty() {
+            if self.mode == Mode::Find {
+                self.load_find_items();
+            } else {
+                self.filtered_indices = (0..self.items.len()).collect();
+            }
+            if !self.filtered_indices.is_empty() {
+                self.list_state.select(Some(0));
+            }
             return;
         }
 
+        if self.mode == Mode::Find {
+            if self.find_cache_root != self.current_dir || self.find_cache.is_empty() {
+                self.find_cache = crate::walker::recursive_dir_search(
+                    &self.current_dir,
+                    self.show_dotfiles,
+                    self.show_winhidden,
+                );
+                self.find_cache_root = self.current_dir.clone();
+            }
+
+            let pattern = Pattern::parse(
+                &self.query,
+                CaseMatching::Ignore,
+                Normalization::Smart,
+            );
+
+            let mut scored: Vec<(usize, u32)> = self
+                .find_cache
+                .iter()
+                .enumerate()
+                .filter_map(|(i, item)| {
+                    self.scratch.clear();
+                    let haystack = Utf32Str::new(item.display.as_str(), &mut self.scratch);
+                    pattern.score(haystack, &mut self.matcher).map(|s| (i, s))
+                })
+                .collect();
+
+            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.truncate(200);
+
+            let top_indices: Vec<usize> = scored.into_iter().map(|(i, _)| i).collect();
+            self.items = top_indices.iter().map(|&i| self.find_cache[i].clone()).collect();
+            self.filtered_indices = (0..self.items.len()).collect();
+
+            if !self.filtered_indices.is_empty() {
+                self.list_state.select(Some(0));
+            }
+            return;
+        }
+
+        // Search mode: score current items
         let pattern = Pattern::parse(
             &self.query,
             CaseMatching::Ignore,
@@ -222,52 +280,6 @@ impl App {
 
         scored.sort_by(|a, b| b.1.cmp(&a.1));
         self.filtered_indices = scored.into_iter().map(|(i, _)| i).collect();
-
-        if !self.filtered_indices.is_empty() {
-            self.list_state.select(Some(0));
-        }
-    }
-
-    pub fn run_find_search(&mut self) {
-        self.find_pending = false;
-
-        if self.query.is_empty() {
-            self.load_find_items();
-            return;
-        }
-
-        if self.find_cache_root != self.current_dir || self.find_cache.is_empty() {
-            self.find_cache = crate::walker::recursive_dir_search(
-                &self.current_dir,
-                self.show_dotfiles,
-                self.show_winhidden,
-            );
-            self.find_cache_root = self.current_dir.clone();
-        }
-
-        let pattern = Pattern::parse(
-            &self.query,
-            CaseMatching::Ignore,
-            Normalization::Smart,
-        );
-
-        let mut scored: Vec<(usize, u32)> = self
-            .find_cache
-            .iter()
-            .enumerate()
-            .filter_map(|(i, item)| {
-                self.scratch.clear();
-                let haystack = Utf32Str::new(item.display.as_str(), &mut self.scratch);
-                pattern.score(haystack, &mut self.matcher).map(|s| (i, s))
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
-        scored.truncate(200);
-
-        let top_indices: Vec<usize> = scored.into_iter().map(|(i, _)| i).collect();
-        self.items = top_indices.iter().map(|&i| self.find_cache[i].clone()).collect();
-        self.filtered_indices = (0..self.items.len()).collect();
 
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
@@ -353,6 +365,7 @@ impl App {
                     self.invalidate_find_cache();
                     self.refresh_items();
                     self.preview_dirty = true;
+                    self.apply_query();
                 }
             }
         } else {
@@ -361,7 +374,11 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        if self.handle_config_key(&key) {
+            return;
+        }
+
+        use crossterm::event::KeyCode;
 
         match self.focus {
             Focus::List => {
@@ -370,20 +387,7 @@ impl App {
                     KeyCode::Down => self.list_nav_down(),
                     KeyCode::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(10),
                     KeyCode::PageDown => self.preview_scroll = self.preview_scroll.saturating_add(10),
-                    KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if let Some(idx) = self.list_state.selected() {
-                            if let Some(&item_idx) = self.filtered_indices.get(idx) {
-                                if let Some(item) = self.items.get(item_idx) {
-                                    if item.is_dir {
-                                        self.exit_action = ExitAction::SpawnYazi(item.full_path.clone());
-                                        self.should_quit = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
                     KeyCode::Enter => self.handle_enter(),
-                    KeyCode::Tab => self.switch_mode(),
                     _ => self.handle_list_key(key),
                 }
             }
@@ -455,7 +459,7 @@ impl App {
             }
             KeyCode::Char(c) => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.handle_global(key);
+                    self.handle_config_key(&key);
                 } else {
                     self.query.insert(self.cursor_pos, c);
                     self.cursor_pos += 1;
@@ -499,7 +503,7 @@ impl App {
             }
             KeyCode::Char(c) => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.handle_global(key);
+                    self.handle_config_key(&key);
                 } else {
                     self.query.insert(self.cursor_pos, c);
                     self.cursor_pos += 1;
@@ -513,25 +517,52 @@ impl App {
         }
     }
 
-    fn handle_global(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::{KeyCode, KeyModifiers};
-
-        if matches!(key.modifiers, KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Char('c') | KeyCode::Char('C') => {
-                    self.should_quit = true;
+    fn handle_config_key(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        use crate::config;
+        let action = config::get().keys.match_action(key);
+        match action {
+            Some("quit") => { self.should_quit = true; true }
+            Some("toggle_dotfiles") => {
+                self.show_dotfiles = !self.show_dotfiles;
+                self.invalidate_find_cache();
+                self.refresh_items();
+                self.apply_query();
+                true
+            }
+            Some("toggle_winhidden") => {
+                self.invalidate_find_cache();
+                self.toggle_winhidden();
+                self.apply_query();
+                true
+            }
+            Some("open_settings") => { self.edit_pending = true; true }
+            Some("switch_mode") => { self.switch_mode(); true }
+            Some("open_explorer") => {
+                if let Some(idx) = self.list_state.selected() {
+                    if let Some(&item_idx) = self.filtered_indices.get(idx) {
+                        if let Some(item) = self.items.get(item_idx) {
+                            if item.is_dir {
+                                self.exit_action = ExitAction::SpawnYazi(item.full_path.clone());
+                                self.should_quit = true;
+                            }
+                        }
+                    }
                 }
-                KeyCode::Char('a') | KeyCode::Char('A') => {
-                    self.show_dotfiles = !self.show_dotfiles;
+                true
+            }
+            Some("go_home") => {
+                if let Some(home) = dirs::home_dir() {
+                    self.current_dir = home;
+                    self.query.clear();
+                    self.cursor_pos = 0;
+                    self.reset_preview();
                     self.invalidate_find_cache();
                     self.refresh_items();
+                    self.preview_dirty = true;
                 }
-                KeyCode::Char('w') | KeyCode::Char('W') => {
-                    self.invalidate_find_cache();
-                    self.toggle_winhidden();
-                }
-                _ => {}
+                true
             }
+            _ => false,
         }
     }
 
@@ -557,6 +588,7 @@ impl App {
         }
 
         self.refresh_items();
+        self.apply_query();
     }
 
     pub fn toggle_winhidden(&mut self) {
@@ -589,16 +621,17 @@ impl App {
         let root = self.grep_search_root.clone();
 
         let mut cmd = std::process::Command::new("rg");
-        cmd.args(["--vimgrep", "--smart-case", "--max-depth", "5"]);
+        cmd.args(["--vimgrep", "--smart-case"]);
+        cmd.args(["--max-depth", &config::get().grep_max_depth.to_string()]);
 
-        for d in crate::config::EXCLUDE_DIRS {
+        for d in config::get().exclude_dirs.iter() {
             cmd.args(["--glob", &format!("!{}", d)]);
         }
-        for p in crate::config::EXCLUDE_PATH_GLOBS {
+        for p in config::get().exclude_path_globs.iter() {
             cmd.args(["--glob", &format!("!{}", p)]);
         }
         if !self.show_winhidden {
-            for d in crate::config::EXCLUDE_WIN_DIRS {
+            for d in config::get().exclude_win_dirs.iter() {
                 cmd.args(["--glob", &format!("!{}", d)]);
             }
         }
@@ -655,7 +688,7 @@ impl App {
         let home_str = home.as_ref().map(|h| h.to_string_lossy().replace('\\', "/"));
         let home_lower = home_str.as_ref().map(|s| s.to_lowercase());
         let mut zoxide_items: Vec<DirEntryItem> = Vec::new();
-        let limit = 5;
+        let limit = config::get().zoxide_limit;
 
         for zpath in &self.zoxide_cache {
             let full_str = zpath.to_string_lossy().replace('\\', "/");

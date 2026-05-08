@@ -2,8 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::io::Write;
 
-use crate::config::{EXCLUDE_DIRS, EXCLUDE_WIN_DIRS, EXCLUDE_PATH_GLOBS,
-                    PRIORITY_ROOTS, MAX_PRIORITY_DEPTH, MAX_SECONDARY_DEPTH};
+use crate::config;
 
 pub fn global_search(query: &str) -> anyhow::Result<()> {
     if query.is_empty() {
@@ -12,7 +11,7 @@ pub fn global_search(query: &str) -> anyhow::Result<()> {
     }
 
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME not set"))?;
-    let priority_roots: Vec<PathBuf> = PRIORITY_ROOTS
+    let priority_roots: Vec<PathBuf> = config::get().priority_roots
         .iter()
         .map(|r| home.join(r))
         .filter(|p| p.exists())
@@ -44,7 +43,7 @@ fn search_content(query: &str, priority: &[PathBuf], home: &PathBuf) -> anyhow::
         let mut cmd = std::process::Command::new("rg");
         cmd.args(["--files-with-matches", "--smart-case", "--hidden"]);
         cmd.args(build_exclude_args());
-        cmd.args(["--max-depth", &MAX_PRIORITY_DEPTH.to_string()]);
+        cmd.args(["--max-depth", &config::get().max_priority_depth.to_string()]);
         cmd.arg(query).arg(root);
 
         if let Ok(out) = cmd.output() {
@@ -59,7 +58,7 @@ fn search_content(query: &str, priority: &[PathBuf], home: &PathBuf) -> anyhow::
     let mut cmd = std::process::Command::new("rg");
     cmd.args(["--files-with-matches", "--smart-case", "--hidden"]);
     cmd.args(build_exclude_args());
-    cmd.args(["--max-depth", &MAX_SECONDARY_DEPTH.to_string()]);
+    cmd.args(["--max-depth", &config::get().max_secondary_depth.to_string()]);
     cmd.arg(query).arg(home);
 
     if let Ok(out) = cmd.output() {
@@ -128,10 +127,10 @@ fn search_dirnames(query: &str, priority: &[PathBuf], home: &PathBuf) -> anyhow:
     let query_lower = query.to_lowercase();
 
     for root in priority {
-        collect_matching_dirs(root, &query_lower, MAX_PRIORITY_DEPTH, &mut results);
+        collect_matching_dirs(root, &query_lower, config::get().max_priority_depth, &mut results);
     }
 
-    collect_matching_dirs(home, &query_lower, MAX_SECONDARY_DEPTH, &mut results);
+    collect_matching_dirs(home, &query_lower, config::get().max_secondary_depth, &mut results);
 
     results.retain(|r| {
         let path = PathBuf::from(r);
@@ -148,7 +147,7 @@ fn collect_matching_dirs(root: &PathBuf, query: &str, max_depth: usize, results:
     builder.require_git(false);
     builder.filter_entry(|entry| {
         let name = entry.file_name().to_string_lossy();
-        if EXCLUDE_DIRS.contains(&name.as_ref()) {
+        if config::get().exclude_dirs.contains(&name.as_ref()) {
             return false;
         }
         true
@@ -169,16 +168,17 @@ fn collect_matching_dirs(root: &PathBuf, query: &str, max_depth: usize, results:
 }
 
 fn build_exclude_args() -> Vec<String> {
+    let cfg = config::get();
     let mut args = Vec::new();
-    for d in EXCLUDE_DIRS {
+    for d in &cfg.exclude_dirs {
         args.push("--glob".into());
         args.push(format!("!{}", d));
     }
-    for d in EXCLUDE_WIN_DIRS {
+    for d in &cfg.exclude_win_dirs {
         args.push("--glob".into());
         args.push(format!("!{}", d));
     }
-    for p in EXCLUDE_PATH_GLOBS {
+    for p in &cfg.exclude_path_globs {
         args.push("--glob".into());
         args.push(format!("!{}", p));
     }

@@ -34,8 +34,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(" cdx ")
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .title(Line::from(Span::styled(" CDX ", Style::default().add_modifier(Modifier::BOLD))))
             .title_alignment(Alignment::Center);
 
         frame.render_widget(block.clone(), popup);
@@ -47,7 +48,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     };
 
     render_status(frame, outer[0], app);
-    render_input(frame, outer[1], app);
+    let input_cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(outer[1]);
+    render_input(frame, input_cols[0], app);
+    render_info(frame, input_cols[1], app);
     render_list(frame, main[0], app);
     render_preview(frame, main[1], app);
     render_header(frame, outer[3], app);
@@ -62,7 +65,7 @@ fn layout_inner(area: Rect) -> ([Rect; 4], [Rect; 2]) {
         Constraint::Length(3),
         Constraint::Length(3),
         Constraint::Fill(1),
-        Constraint::Length(3),
+        Constraint::Length(4),
     ])
     .split(area);
 
@@ -136,7 +139,7 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
         .title(
             Line::from(Span::styled(
                 format!(" {}/{} ", app.filtered_indices.len(), app.items.len()),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(if app.focus == Focus::List { Color::Rgb(180, 100, 255) } else { Color::Cyan }),
             ))
             .right_aligned(),
         );
@@ -176,8 +179,19 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
         ));
         frame.render_widget(Paragraph::new(sep), chunks[1]);
 
+        let eza_text = {
+            let mut t = app.preview_contents.clone();
+            for line in t.lines.iter_mut() {
+                for span in line.spans.iter_mut() {
+                    let mut s = "  ".to_string();
+                    s.push_str(&span.content);
+                    span.content = s.into();
+                }
+            }
+            t
+        };
         frame.render_widget(
-            Paragraph::new(app.preview_contents.clone()),
+            Paragraph::new(eza_text),
             chunks[2],
         );
     } else {
@@ -189,10 +203,19 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn render_header(frame: &mut Frame, area: Rect, app: &mut App) {
-    let label = match app.mode {
-        Mode::Find => "Enter (cd) | Esc (..) | Esc² (~) | Tab (Search) | Ctrl+Enter (yazi) | Ctrl+A (.) | Ctrl+W (h) | Ctrl+C (quit)",
-        Mode::Search => "Enter (open) | Esc (..) | Esc² (~) | Tab (Grep) | Ctrl+A (.) | Ctrl+W (h) | Ctrl+C (quit)",
-        Mode::Grep => "Enter (cd parent) | Esc (..) | Esc² (~) | Tab (Find) | Ctrl+A (.) | Ctrl+W (h) | Ctrl+C (quit)",
+    let labels = match app.mode {
+        Mode::Find => vec![
+            "Enter (cd) | Esc (..) | Esc² (~) | Tab (Search) | Ctrl+Enter (explorer)",
+            "Ctrl+A (.) | Ctrl+W (h) | Ctrl+E (settings) | Ctrl+C (quit)",
+        ],
+        Mode::Search => vec![
+            "Enter (open) | Esc (..) | Esc² (~) | Tab (Grep)",
+            "Ctrl+A (.) | Ctrl+W (h) | Ctrl+E (settings) | Ctrl+C (quit)",
+        ],
+        Mode::Grep => vec![
+            "Enter (cd parent) | Esc (..) | Esc² (~) | Tab (Find)",
+            "Ctrl+A (.) | Ctrl+W (h) | Ctrl+E (settings) | Ctrl+C (quit)",
+        ],
     };
 
     let block = Block::default()
@@ -211,10 +234,13 @@ fn render_header(frame: &mut Frame, area: Rect, app: &mut App) {
     let inner = block.inner(area);
 
     frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(label).style(Style::default().fg(header_fg()).add_modifier(Modifier::BOLD)),
-        inner,
-    );
+    let lines: Vec<Line> = labels.iter().map(|l| {
+        Line::from(Span::styled(
+            format!("  {}", l),
+            Style::default().fg(header_fg()).add_modifier(Modifier::BOLD),
+        ))
+    }).collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_status(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -298,6 +324,87 @@ fn render_input(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.set_cursor_position((cursor_x, cursor_y));
 }
 
+fn render_info(frame: &mut Frame, area: Rect, app: &mut App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Thick)
+        .border_style(Style::default().fg(header_fg()).add_modifier(Modifier::BOLD))
+        .title(" Info ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Selected item info
+    if let Some(idx) = app.list_state.selected() {
+        if let Some(&item_idx) = app.filtered_indices.get(idx) {
+            if let Some(item) = app.items.get(item_idx) {
+                lines.push(Line::from(Span::styled(
+                    format!(" {} {}", icon_for(item), item.display),
+                    style_for(item),
+                )));
+                if let Ok(meta) = std::fs::metadata(&item.full_path) {
+                    if meta.is_file() {
+                        let size = meta.len();
+                        let size_str = if size > 1024 * 1024 {
+                            format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
+                        } else if size > 1024 {
+                            format!("{:.1} KB", size as f64 / 1024.0)
+                        } else {
+                            format!("{} B", size)
+                        };
+                        lines.push(Line::from(Span::styled(format!(" size: {}", size_str), Style::default().fg(Color::DarkGray))));
+                    }
+                    if let Ok(modified) = meta.modified() {
+                        if let Ok(elapsed) = modified.elapsed() {
+                            let age = if elapsed.as_secs() < 3600 {
+                                format!("{}m ago", elapsed.as_secs() / 60)
+                            } else if elapsed.as_secs() < 86400 {
+                                format!("{}h ago", elapsed.as_secs() / 3600)
+                            } else {
+                                format!("{}d ago", elapsed.as_secs() / 86400)
+                            };
+                            lines.push(Line::from(Span::styled(format!(" modified: {}", age), Style::default().fg(Color::DarkGray))));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Git info
+    let git_toplevel = std::process::Command::new("git")
+        .args(["-C", &app.current_dir.to_string_lossy(), "rev-parse", "--show-toplevel"])
+        .output()
+        .ok();
+    if let Some(out) = git_toplevel {
+        if out.status.success() {
+            let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let branch = std::process::Command::new("git")
+                .args(["-C", &app.current_dir.to_string_lossy(), "rev-parse", "--abbrev-ref", "HEAD"])
+                .output()
+                .ok()
+                .and_then(|o| if o.status.success() { Some(String::from_utf8_lossy(&o.stdout).trim().to_string()) } else { None });
+            let status = std::process::Command::new("git")
+                .args(["-C", &app.current_dir.to_string_lossy(), "status", "--porcelain"])
+                .output()
+                .ok();
+            let dirty = status.map_or(false, |o| !o.stdout.is_empty());
+            let display_path = display_path(&std::path::PathBuf::from(&top));
+            lines.push(Line::from(Span::styled(" git:", Style::default().fg(header_fg()).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(Span::styled(format!("  {}", display_path), Style::default().fg(Color::Cyan))));
+            if let Some(b) = branch {
+                lines.push(Line::from(Span::styled(
+                    format!("  {} ({})", b, if dirty { "dirty" } else { "clean" }),
+                    if dirty { Style::default().fg(Color::LightRed) } else { Style::default().fg(Color::LightGreen) },
+                )));
+            }
+        }
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
     let focus_fg = if app.focus == Focus::Preview {
         Color::Yellow
@@ -326,18 +433,22 @@ fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
     let mut text = app.preview_text.clone();
     if app.focus == Focus::Preview && !app.preview_entries.is_empty() {
         if let Some(entry) = app.preview_entries.get(app.preview_selection) {
+            // auto-scroll to keep selected entry visible
+            let visible_lines = inner.height as u64;
+            if (entry.line_index as u64) >= app.preview_scroll + visible_lines {
+                app.preview_scroll = (entry.line_index as u64).saturating_sub(visible_lines) + 1;
+            } else if (entry.line_index as u64) < app.preview_scroll {
+                app.preview_scroll = entry.line_index as u64;
+            }
+
             if entry.line_index < text.lines.len() {
                 let line = &text.lines[entry.line_index];
-                let spans: Vec<Span> = line
-                    .spans
-                    .iter()
-                    .map(|s| {
-                        Span::styled(
-                            s.content.clone(),
-                            s.style.add_modifier(Modifier::REVERSED),
-                        )
-                    })
-                    .collect();
+                let mut spans: Vec<Span> = line.spans.iter().map(|s| {
+                    Span::styled(s.content.clone(), s.style.add_modifier(Modifier::REVERSED))
+                }).collect();
+                if let Some(last) = spans.last_mut() {
+                    last.content.to_mut().push_str(&" ".repeat(inner.width as usize));
+                }
                 text.lines[entry.line_index] = Line::from(spans);
             }
         }

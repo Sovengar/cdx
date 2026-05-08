@@ -8,7 +8,7 @@ The `cdx` shell command calls `~/.local/bin/cdx.exe` (NOT `cdx-rs.exe`). Source 
 
 ```powershell
 cargo build --release
-Copy-Item -LiteralPath "target\release\cdx-rs.exe" -Destination "$env:USERPROFILE\.local\bin\cdx.exe" -Force
+Copy-Item -LiteralPath "target\release\cdx.exe" -Destination "$env:USERPROFILE\.local\bin\cdx.exe" -Force
 ```
 
 If the copy fails with **"file in use"**, the user has `cdx` open — ask them to close it first (Ctrl+C / Ctrl+Q), then retry.

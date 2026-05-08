@@ -10,7 +10,7 @@ use super::app::{App, ExitAction, Mode};
 
 pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
     let mut terminal = ratatui::init();
-    let mut app = App::new(initial_query)?;
+    let mut app = App::new(initial_query.clone())?;
 
     execute!(stdout(), crossterm::event::EnableMouseCapture)?;
 
@@ -76,10 +76,29 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
             }
             app.preview_dirty = false;
         }
+
+        if app.edit_pending {
+            app.edit_pending = false;
+            app.should_quit = true;
+        }
     }
 
     execute!(stdout(), crossterm::event::DisableMouseCapture)?;
     ratatui::restore();
+
+    if app.edit_pending {
+        let cfg_path = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config")
+            .join("cdx")
+            .join("config.toml");
+        eprintln!("[cdx] opening {} ...", cfg_path.display());
+        #[cfg(windows)]
+        { std::process::Command::new("cmd").args(["/c", "start", "", &cfg_path.to_string_lossy()]).spawn().ok(); }
+        #[cfg(not(windows))]
+        { std::process::Command::new("xdg-open").arg(&cfg_path).spawn().ok(); }
+        return run(initial_query);
+    }
 
     if let ExitAction::SpawnYazi(path) = &app.exit_action {
         std::process::Command::new("yazi")

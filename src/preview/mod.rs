@@ -66,9 +66,6 @@ pub fn generate_entries(app: &App, item: &DirEntryItem) -> Vec<PreviewEntry> {
         let mut entries = Vec::new();
         let mut line_counter = 0;
         build_tree_with_entries(&full_path, 2, 0, "", app.show_dotfiles, app.show_winhidden, &mut entries, &mut line_counter);
-        for entry in &mut entries {
-            entry.line_index += 1;
-        }
         entries
     } else {
         Vec::new()
@@ -91,7 +88,7 @@ fn build_tree_with_entries(
         for entry in dir_entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
 
-            if crate::config::EXCLUDE_DIRS.contains(&name.as_str()) {
+            if crate::config::get().exclude_dirs.contains(&name.as_str()) {
                 continue;
             }
             if !show_dotfiles && name.starts_with('.') {

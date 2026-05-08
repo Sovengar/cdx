@@ -1,0 +1,40 @@
+# cdx configuration file
+# See https://github.com/Sovengar/cdx for docs
+
+# Display defaults
+show_dotfiles = false
+show_winhidden = false
+popup_width_pct = 80
+popup_height_pct = 80
+
+# Zoxide
+zoxide_limit = 5
+
+# Timing (milliseconds)
+grep_debounce_ms = 80
+find_debounce_ms = 50
+
+# Search
+grep_max_depth = 5
+
+# Walker
+priority_roots = ["dev", ".config"]
+max_priority_depth = 6
+max_secondary_depth = 5
+
+exclude_dirs = [
+    "node_modules", ".git", ".cache", "cache",
+    "licenses", "vendor", "target", "build",
+    "dist", "Modules", "modules", "lib", "platform",
+]
+
+exclude_win_dirs = ["AppData", "ProgramData"]
+exclude_path_globs = ["**/go/pkg/mod"]
+
+[keys]
+quit = "ctrl+c"
+toggle_dotfiles = "ctrl+a"
+toggle_winhidden = "ctrl+w"
+open_settings = "ctrl+e"
+switch_mode = "tab"
+open_explorer = "ctrl+enter"

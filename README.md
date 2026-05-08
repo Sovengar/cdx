@@ -1,52 +1,117 @@
-# cdx-rs
+# cdx — interactive directory navigator
 
-Interactive directory navigator — Rust rewrite of Cdx.ps1.
+Jump between directories faster than `cd`. Think `zoxide` meets `fzf` in a TUI.
 
-## Installation
+![screenshot](https://img.shields.io/badge/status-beta-blue)
 
+## Features
+
+- **TUI browser** — Fuzzy-filter directories and files, preview contents inline
+- **Three modes**: **Find** (dirs only), **Search** (files + dirs), **Grep** (full-text via ripgrep)
+- **Zoxide integration** — Frequently-used paths show first with ★
+- **Tree preview** — Navigate directory trees from the preview panel
+- **Git awareness** — Shows branch, dirty/clean status, git status in preview
+- **Fully configurable** — `~/.config/cdx/config.toml`, including keybindings
+- **Explorer integration** — `Ctrl+Enter` to open selected dir in yazi (or your file manager)
+- **Cross-platform** — Windows (PowerShell) and Unix
+
+## Quick install
+
+**Windows (PowerShell):**
 ```powershell
-# Build
-cd ~/dev/cdx-rs
-cargo build --release
-
-# Install to PATH
-cp target/release/cdx-rs.exe ~/.local/bin/
+irm https://raw.githubusercontent.com/Sovengar/cdx/main/scripts/install.ps1 | iex
 ```
 
-The PowerShell profile already includes the `cdx` wrapper function. Source it:
+**Linux / macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Sovengar/cdx/main/scripts/install.sh | bash
+```
+
+## Manual install
+
+Requires Rust: https://rustup.rs
+
+```bash
+git clone https://github.com/Sovengar/cdx.git
+cd cdx
+cargo build --release
+# Binary at target/release/cdx-rs
+```
+
+On Windows, copy to `~/.local/bin/cdx.exe`:
+```powershell
+Copy-Item target/release/cdx.exe ~/.local/bin/cdx.exe
+```
+
+On Unix:
+```bash
+cp target/release/cdx-rs ~/.local/bin/cdx
+```
+
+Make sure `~/.local/bin` is in your PATH.
+
+### PowerShell wrapper
+
+Add this to your `$PROFILE` to make `cdx` change the shell's current directory:
 
 ```powershell
-. $PROFILE
+function cdx {
+    $result = & "$env:USERPROFILE\.local\bin\cdx.exe" @args
+    if ($LASTEXITCODE -eq 0 -and $result) {
+        Set-Location $result
+    }
+}
+```
+
+For a PSReadLine keybinding (`Alt+C`) to launch cdx from anywhere:
+
+```powershell
+Set-PSReadLineKeyHandler -Chord Alt+c -ScriptBlock {
+    $result = & "$env:USERPROFILE\.local\bin\cdx.exe"
+    if ($LASTEXITCODE -eq 0 -and $result) {
+        Set-Location $result
+        [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
+    }
+}
 ```
 
 ## Usage
 
 | Command | Action |
 |---------|--------|
-| `cdx` | Open TUI browser at current directory |
+| `cdx` | Open TUI at current directory |
 | `cdx <path>` | Jump to path |
 | `cdx <name>` | Jump via zoxide |
-| `cdx -g <query>` | Global content search (3-phase rg) |
-| `cdx -h` | Show help |
+| `cdx -g <query>` | Global content search |
 | `cdx ~` / `cdx ...` | Print HOME path |
-| `Alt+C` | Launch cdx TUI from anywhere (PSReadLine) |
 
-## Keybindings (TUI)
+### TUI keybindings
 
 | Key | Action |
 |-----|--------|
-| `Enter` | cd into directory / open file |
-| `Esc` | Go to parent directory |
+| `Enter` | cd into directory |
+| `Esc` / `Esc²` | Go to parent / Go to HOME |
 | `↑` / `↓` | Navigate list |
-| `Tab` | Toggle focus: List ↔ Input |
-| `Ctrl+C` | Exit (stay in current dir) |
-| `Ctrl+G` | Cycle modes: Find → Search → Grep → Find |
+| `Tab` | Cycle mode: Find → Search → Grep |
+| `Ctrl+Enter` | Open in yazi/explorer |
 | `Ctrl+A` | Toggle dotfiles |
-| `Ctrl+W` | Toggle WinHidden directories |
-| `Ctrl+H` | Go to HOME |
-| `Ctrl+O` | Open selected dir in yazi |
+| `Ctrl+W` | Toggle WinHidden files |
+| `Ctrl+E` | Edit config file |
+| `Ctrl+C` | Quit |
+
+All keybindings are customizable in `~/.config/cdx/config.toml` under `[keys]`.
 
 ## Dependencies
 
 - **Runtime:** `rg` (ripgrep), `zoxide`, `fzf` (for `-g` mode)
 - **Optional:** `eza`, `bat` (for enhanced preview)
+
+## Configuration
+
+`~/.config/cdx/config.toml` is auto-generated on first run. Edit with `Ctrl+E` from the TUI.
+
+See [config.default.toml](config.default.toml) for all available options.
+
+## License
+
+MIT

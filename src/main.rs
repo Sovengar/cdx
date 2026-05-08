@@ -12,6 +12,7 @@ use clap::Parser;
 use cli::Cli;
 
 fn main() -> anyhow::Result<()> {
+    config::init();
     let cli = Cli::parse();
     let query = cli.query.join(" ");
 
