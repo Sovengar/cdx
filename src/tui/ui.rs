@@ -123,10 +123,15 @@ fn style_for(item: &DirEntryItem) -> Style {
 }
 
 fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
+    let focus_fg = if app.focus == Focus::List {
+        Color::Yellow
+    } else {
+        header_fg()
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(header_fg()))
+        .border_style(Style::default().fg(focus_fg))
         .title(" Files ")
         .title(
             Line::from(Span::styled(

@@ -328,48 +328,6 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
-        match self.focus {
-            Focus::Preview => self.handle_preview_key(key),
-            Focus::List => self.handle_list_key(key),
-        }
-    }
-
-    fn handle_preview_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-
-        match key.code {
-            KeyCode::Left | KeyCode::Esc => {
-                self.focus = Focus::List;
-            }
-            KeyCode::Up => {
-                self.preview_scroll = self.preview_scroll.saturating_sub(1);
-            }
-            KeyCode::Down => {
-                self.preview_scroll = self.preview_scroll.saturating_add(1);
-            }
-            KeyCode::PageUp => {
-                self.preview_scroll = self.preview_scroll.saturating_sub(10);
-            }
-            KeyCode::PageDown => {
-                self.preview_scroll = self.preview_scroll.saturating_add(10);
-            }
-            KeyCode::Enter => {
-                self.handle_enter();
-            }
-            KeyCode::Char(c) => {
-                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
-                    self.handle_global(key);
-                } else {
-                    self.query.insert(self.cursor_pos, c);
-                    self.cursor_pos += 1;
-                    self.apply_query();
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_list_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
 
         match key.code {
@@ -387,6 +345,46 @@ impl App {
                     self.preview_dirty = true;
                 }
             }
+            KeyCode::PageUp => {
+                self.preview_scroll = self.preview_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.preview_scroll = self.preview_scroll.saturating_add(10);
+            }
+            KeyCode::Enter => {
+                self.handle_enter();
+            }
+            _ => match self.focus {
+                Focus::List => self.handle_list_key(key),
+                Focus::Preview => self.handle_preview_key(key),
+            },
+        }
+    }
+
+    fn handle_preview_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match key.code {
+            KeyCode::Left | KeyCode::Esc => {
+                self.focus = Focus::List;
+            }
+            KeyCode::Char(c) => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.handle_global(key);
+                } else {
+                    self.query.insert(self.cursor_pos, c);
+                    self.cursor_pos += 1;
+                    self.apply_query();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_list_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match key.code {
             KeyCode::Left => {
                 if self.cursor_pos > 0 {
                     self.cursor_pos -= 1;
@@ -415,22 +413,13 @@ impl App {
                 }
             }
             KeyCode::Char(c) => {
-                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
                     self.handle_global(key);
                 } else {
                     self.query.insert(self.cursor_pos, c);
                     self.cursor_pos += 1;
                     self.apply_query();
                 }
-            }
-            KeyCode::Enter => {
-                self.handle_enter();
-            }
-            KeyCode::PageDown => {
-                self.preview_scroll = self.preview_scroll.saturating_add(10);
-            }
-            KeyCode::PageUp => {
-                self.preview_scroll = self.preview_scroll.saturating_sub(10);
             }
             KeyCode::Esc => {
                 self.handle_esc();
