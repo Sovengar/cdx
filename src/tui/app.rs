@@ -271,6 +271,14 @@ impl App {
         }
     }
 
+    fn reset_preview(&mut self) {
+        self.preview_text = Text::default();
+        self.preview_contents = Text::default();
+        self.preview_entries.clear();
+        self.preview_selection = 0;
+        self.preview_scroll = 0;
+    }
+
     pub fn handle_enter(&mut self) {
         let selected = self.list_state.selected();
         let idx = match selected.and_then(|s| self.filtered_indices.get(s)) {
@@ -288,7 +296,7 @@ impl App {
                     self.current_dir = item.full_path.clone();
                     self.query.clear();
                     self.cursor_pos = 0;
-                    self.preview_text = Text::default();
+                    self.reset_preview();
                     self.invalidate_find_cache();
                     self.refresh_items();
                     self.preview_dirty = true;
@@ -303,7 +311,7 @@ impl App {
                         self.current_dir = parent.to_path_buf();
                         self.query.clear();
                         self.cursor_pos = 0;
-                        self.preview_text = Text::default();
+                        self.reset_preview();
                         self.mode = Mode::Find;
                         self.invalidate_find_cache();
                         self.refresh_items();
@@ -322,9 +330,10 @@ impl App {
                 let parent = parent.to_path_buf();
                 if parent.exists() {
                     self.current_dir = parent;
-                    self.preview_text = Text::default();
+                    self.reset_preview();
                     self.invalidate_find_cache();
                     self.refresh_items();
+                    self.preview_dirty = true;
                 }
             }
         } else {
@@ -385,9 +394,7 @@ impl App {
                         self.current_dir = entry.full_path.clone();
                         self.query.clear();
                         self.cursor_pos = 0;
-                        self.preview_text = Text::default();
-                        self.preview_entries.clear();
-                        self.preview_selection = 0;
+                        self.reset_preview();
                         self.focus = Focus::List;
                         self.invalidate_find_cache();
                         self.refresh_items();
