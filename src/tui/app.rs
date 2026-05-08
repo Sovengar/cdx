@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Matcher, Config, Utf32Str};
@@ -80,6 +81,7 @@ pub struct App {
     pub find_cache_root: PathBuf,
 
     pub tick: u64,
+    pub last_esc_time: Option<Instant>,
 }
 
 impl App {
@@ -132,6 +134,7 @@ impl App {
             find_cache_root: PathBuf::new(),
 
             tick: 0,
+            last_esc_time: None,
         })
     }
 
@@ -323,6 +326,22 @@ impl App {
     }
 
     pub fn handle_esc(&mut self) {
+        if let Some(last) = self.last_esc_time {
+            if last.elapsed() < Duration::from_millis(300) {
+                self.last_esc_time = None;
+                if let Some(home) = dirs::home_dir() {
+                    self.current_dir = home;
+                    self.query.clear();
+                    self.cursor_pos = 0;
+                    self.reset_preview();
+                    self.invalidate_find_cache();
+                    self.refresh_items();
+                    self.preview_dirty = true;
+                }
+                return;
+            }
+        }
+        self.last_esc_time = Some(Instant::now());
         if let Some(parent) = self.current_dir.parent() {
             if parent.as_os_str().is_empty() {
                 self.should_quit = true;
@@ -342,7 +361,7 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         match self.focus {
             Focus::List => {
@@ -351,7 +370,20 @@ impl App {
                     KeyCode::Down => self.list_nav_down(),
                     KeyCode::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(10),
                     KeyCode::PageDown => self.preview_scroll = self.preview_scroll.saturating_add(10),
+                    KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if let Some(idx) = self.list_state.selected() {
+                            if let Some(&item_idx) = self.filtered_indices.get(idx) {
+                                if let Some(item) = self.items.get(item_idx) {
+                                    if item.is_dir {
+                                        self.exit_action = ExitAction::SpawnYazi(item.full_path.clone());
+                                        self.should_quit = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     KeyCode::Enter => self.handle_enter(),
+                    KeyCode::Tab => self.switch_mode(),
                     _ => self.handle_list_key(key),
                 }
             }
@@ -388,6 +420,18 @@ impl App {
                     self.preview_selection += 1;
                 }
             }
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(idx) = self.list_state.selected() {
+                    if let Some(&item_idx) = self.filtered_indices.get(idx) {
+                        if let Some(item) = self.items.get(item_idx) {
+                            if item.is_dir {
+                                self.exit_action = ExitAction::SpawnYazi(item.full_path.clone());
+                                self.should_quit = true;
+                            }
+                        }
+                    }
+                }
+            }
             KeyCode::Enter => {
                 if let Some(entry) = self.preview_entries.get(self.preview_selection) {
                     if entry.is_dir && entry.full_path.is_dir() {
@@ -404,6 +448,10 @@ impl App {
             }
             KeyCode::Left | KeyCode::Esc => {
                 self.focus = Focus::List;
+            }
+            KeyCode::Tab => {
+                self.focus = Focus::List;
+                self.switch_mode();
             }
             KeyCode::Char(c) => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -481,29 +529,6 @@ impl App {
                 KeyCode::Char('w') | KeyCode::Char('W') => {
                     self.invalidate_find_cache();
                     self.toggle_winhidden();
-                }
-                KeyCode::Char('h') | KeyCode::Char('H') => {
-                    if let Some(home) = dirs::home_dir() {
-                        self.current_dir = home;
-                        self.preview_text = Text::default();
-                        self.invalidate_find_cache();
-                        self.refresh_items();
-                    }
-                }
-                KeyCode::Char('o') | KeyCode::Char('O') => {
-                    if let Some(idx) = self.list_state.selected() {
-                        if let Some(&item_idx) = self.filtered_indices.get(idx) {
-                            if let Some(item) = self.items.get(item_idx) {
-                                if item.is_dir {
-                                    self.exit_action = ExitAction::SpawnYazi(item.full_path.clone());
-                                    self.should_quit = true;
-                                }
-                            }
-                        }
-                    }
-                }
-                KeyCode::Char('g') | KeyCode::Char('G') => {
-                    self.switch_mode();
                 }
                 _ => {}
             }
@@ -626,20 +651,30 @@ impl App {
     }
 
     fn merge_zoxide(&mut self, mut walker_items: Vec<DirEntryItem>) -> Vec<DirEntryItem> {
-        let home = dirs::home_dir().unwrap_or_default();
-        let home_str = home.to_string_lossy().replace('\\', "/");
+        let home = dirs::home_dir();
+        let home_str = home.as_ref().map(|h| h.to_string_lossy().replace('\\', "/"));
+        let home_lower = home_str.as_ref().map(|s| s.to_lowercase());
         let mut zoxide_items: Vec<DirEntryItem> = Vec::new();
         let limit = 5;
 
         for zpath in &self.zoxide_cache {
+            let full_str = zpath.to_string_lossy().replace('\\', "/");
+            if let Some(ref hl) = home_lower {
+                if !full_str.to_lowercase().starts_with(hl) {
+                    continue;
+                }
+            }
             let exists = walker_items.iter().any(|w| w.full_path == *zpath);
             let is_current = *zpath == self.current_dir;
             if exists || is_current {
                 continue;
             }
-            let full_str = zpath.to_string_lossy().replace('\\', "/");
-            let display = if full_str.starts_with(&home_str) {
-                format!("~{}", &full_str[home_str.len()..])
+            let display = if let Some(ref hs) = home_str {
+                if full_str.starts_with(hs.as_str()) {
+                    format!("~{}", &full_str[hs.len()..])
+                } else {
+                    full_str.clone()
+                }
             } else {
                 full_str.clone()
             };

@@ -208,7 +208,6 @@ fn build_tree_lines(
 fn preview_directory(path: &Path, show_dotfiles: bool, show_winhidden: bool) -> Text<'static> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    lines.push(header_line("=== TREE ==="));
     let tree = build_tree_lines(path, 2, 0, "", show_dotfiles, show_winhidden);
     if tree.is_empty() {
         lines.push(Line::from(Span::styled(

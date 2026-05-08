@@ -130,8 +130,8 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(focus_fg))
+        .border_type(BorderType::Thick)
+        .border_style(Style::default().fg(focus_fg).add_modifier(Modifier::BOLD))
         .title(" Files ")
         .title(
             Line::from(Span::styled(
@@ -190,15 +190,15 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn render_header(frame: &mut Frame, area: Rect, app: &mut App) {
     let label = match app.mode {
-        Mode::Find => "Enter (cd) | Esc (..) | Ctrl+G (Search) | Ctrl+O (yazi) | Ctrl+A (.) | Ctrl+W (h) | Ctrl+H (~) | Ctrl+C (quit)",
-        Mode::Search => "Enter (open) | Esc (..) | Ctrl+G (Grep) | Ctrl+H (~) | Ctrl+A (.) | Ctrl+W (h) | Ctrl+C (quit)",
-        Mode::Grep => "Enter (cd parent) | Esc (..) | Ctrl+G (Find) | Ctrl+H (~) | Ctrl+A (.) | Ctrl+W (h) | Ctrl+C (quit)",
+        Mode::Find => "Enter (cd) | Esc (..) | Esc² (~) | Tab (Search) | Ctrl+Enter (yazi) | Ctrl+A (.) | Ctrl+W (h) | Ctrl+C (quit)",
+        Mode::Search => "Enter (open) | Esc (..) | Esc² (~) | Tab (Grep) | Ctrl+A (.) | Ctrl+W (h) | Ctrl+C (quit)",
+        Mode::Grep => "Enter (cd parent) | Esc (..) | Esc² (~) | Tab (Find) | Ctrl+A (.) | Ctrl+W (h) | Ctrl+C (quit)",
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(header_fg()))
+        .border_type(BorderType::Thick)
+        .border_style(Style::default().fg(header_fg()).add_modifier(Modifier::BOLD))
         .title(" Legend ")
         .title_bottom(
             Line::from(Span::styled(
@@ -242,8 +242,8 @@ fn render_status(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let path_block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(header_fg()))
+        .border_type(BorderType::Thick)
+        .border_style(Style::default().fg(header_fg()).add_modifier(Modifier::BOLD))
         .title(" Path ");
 
     let path_inner = path_block.inner(cols[0]);
@@ -261,8 +261,8 @@ fn render_status(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let status_block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(header_fg()))
+        .border_type(BorderType::Thick)
+        .border_style(Style::default().fg(header_fg()).add_modifier(Modifier::BOLD))
         .title(" Search configuration ");
 
     let status_inner = status_block.inner(cols[1]);
@@ -279,8 +279,8 @@ fn render_status(frame: &mut Frame, area: Rect, app: &mut App) {
 fn render_input(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(header_fg()))
+        .border_type(BorderType::Thick)
+        .border_style(Style::default().fg(header_fg()).add_modifier(Modifier::BOLD))
         .title(" \u{1F50D} ");
 
     let inner = block.inner(area);
@@ -306,9 +306,9 @@ fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(focus_fg))
-        .title(" Preview ");
+        .border_type(BorderType::Thick)
+        .border_style(Style::default().fg(focus_fg).add_modifier(Modifier::BOLD))
+        .title(" Tree ");
 
     let inner = block.inner(area);
 
