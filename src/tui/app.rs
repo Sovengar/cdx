@@ -153,6 +153,7 @@ impl App {
         self.filtered_indices = (0..self.items.len()).collect();
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
+            self.preview_dirty = true;
         }
     }
 
@@ -542,18 +543,19 @@ impl App {
         let home = dirs::home_dir().unwrap_or_default();
         let home_str = home.to_string_lossy().replace('\\', "/");
         let mut zoxide_items: Vec<DirEntryItem> = Vec::new();
-        let limit = 7;
+        let limit = 5;
 
         for zpath in &self.zoxide_cache {
             let exists = walker_items.iter().any(|w| w.full_path == *zpath);
-            if exists {
+            let is_current = *zpath == self.current_dir;
+            if exists || is_current {
                 continue;
             }
             let full_str = zpath.to_string_lossy().replace('\\', "/");
             let display = if full_str.starts_with(&home_str) {
-                format!("★ ~{}", &full_str[home_str.len()..])
+                format!("~{}", &full_str[home_str.len()..])
             } else {
-                format!("★ {}", full_str)
+                full_str.clone()
             };
             zoxide_items.push(DirEntryItem {
                 display,

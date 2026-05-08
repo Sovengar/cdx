@@ -96,12 +96,29 @@ fn build_tree_lines(
         }
     });
 
+    let total_files = items.iter().filter(|(_, d)| !*d).count();
+    if total_files > 3 {
+        let mut trimmed: Vec<(String, bool)> = Vec::new();
+        let mut file_count = 0;
+        for (name, is_dir) in &items {
+            if !*is_dir {
+                file_count += 1;
+                if file_count > 3 {
+                    continue;
+                }
+            }
+            trimmed.push((name.clone(), *is_dir));
+        }
+        trimmed.push((format!("⋯ ({} more)", total_files - 3), false));
+        items = trimmed;
+    }
+
     let mut lines: Vec<Line<'static>> = Vec::new();
     let count = items.len();
 
     for (i, (name, is_dir)) in items.iter().enumerate() {
         let is_last = i == count - 1;
-        let branch = if is_last { "└── " } else { "├── " };
+        let branch = if current_depth == 0 && !*is_dir { "" } else if is_last { "└── " } else { "├── " };
         let icon = if *is_dir { "\u{f07b}" } else { icon_for_name(name) };
         let content = format!("{}{} {}", branch, icon, name);
 

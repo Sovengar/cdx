@@ -127,7 +127,14 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(header_fg()))
-        .title(" Files ");
+        .title(" Files ")
+        .title(
+            Line::from(Span::styled(
+                format!(" {}/{} ", app.filtered_indices.len(), app.items.len()),
+                Style::default().fg(Color::Cyan),
+            ))
+            .right_aligned(),
+        );
 
     let inner = block.inner(area);
 
@@ -200,7 +207,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &mut App) {
 
     frame.render_widget(block, area);
     frame.render_widget(
-        Paragraph::new(label).style(Style::default().fg(header_fg())),
+        Paragraph::new(label).style(Style::default().fg(header_fg()).add_modifier(Modifier::BOLD)),
         inner,
     );
 }
