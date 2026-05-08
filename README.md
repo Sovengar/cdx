@@ -103,7 +103,7 @@ All keybindings are customizable in `~/.config/cdx/config.toml` under `[keys]`.
 
 ## Dependencies
 
-- **Runtime:** `rg` (ripgrep), `zoxide`, `fzf` (for `-g` mode)
+- **Runtime:** `rg` (ripgrep), `zoxide`, `fzf` (for `-g` mode), `yazi` (for `Ctrl+Enter`)
 - **Optional:** `eza`, `bat` (for enhanced preview)
 
 ## Configuration
