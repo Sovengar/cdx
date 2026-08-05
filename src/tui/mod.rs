@@ -2,7 +2,11 @@ pub mod actions;
 pub mod app;
 pub mod events;
 pub mod grep;
+pub mod input;
+pub mod navigation;
+pub mod preview_state;
 pub mod score;
+pub mod search;
 pub mod ui;
 
 pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<std::path::PathBuf>> {

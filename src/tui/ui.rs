@@ -125,7 +125,7 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▶ ");
 
-    if !app.preview_contents.lines.is_empty() {
+    if !app.preview.contents.lines.is_empty() {
         let chunks = Layout::vertical([
             Constraint::Fill(3),
             Constraint::Length(1),
@@ -143,7 +143,7 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
         frame.render_widget(Paragraph::new(sep), chunks[1]);
 
         let eza_text = {
-            let mut t = app.preview_contents.clone();
+            let mut t = app.preview.contents.clone();
             for line in t.lines.iter_mut() {
                 for span in line.spans.iter_mut() {
                     let mut s = "  ".to_string();
@@ -224,8 +224,8 @@ fn render_status(frame: &mut Frame, area: Rect, app: &mut App) {
     };
     let dot = if app.show_dotfiles { "✓" } else { "✗" };
 
-    let spinner = if app.find_deadline.is_some()
-        || app.search_cancel.is_some()
+    let spinner = if app.search.find_deadline.is_some()
+        || app.search.cancel.is_some()
         || app.grep_pending
     {
         let idx = (app.tick as usize / 3) % SPINNER.len();
@@ -371,7 +371,7 @@ fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let inner = block.inner(area);
 
-    if app.preview_text.lines.is_empty() {
+    if app.preview.text.lines.is_empty() {
         frame.render_widget(
             Paragraph::new(" (select an item) ")
                 .style(Style::default().fg(Color::DarkGray))
@@ -382,15 +382,15 @@ fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
 
-    let mut text = app.preview_text.clone();
-    if app.focus == Focus::Preview && !app.preview_entries.is_empty() {
-        if let Some(entry) = app.preview_entries.get(app.preview_selection) {
+    let mut text = app.preview.text.clone();
+    if app.focus == Focus::Preview && !app.preview.entries.is_empty() {
+        if let Some(entry) = app.preview.entries.get(app.preview.selection) {
             // auto-scroll to keep selected entry visible
             let visible_lines = inner.height as u64;
-            if (entry.line_index as u64) >= app.preview_scroll + visible_lines {
-                app.preview_scroll = (entry.line_index as u64).saturating_sub(visible_lines) + 1;
-            } else if (entry.line_index as u64) < app.preview_scroll {
-                app.preview_scroll = entry.line_index as u64;
+            if (entry.line_index as u64) >= app.preview.scroll + visible_lines {
+                app.preview.scroll = (entry.line_index as u64).saturating_sub(visible_lines) + 1;
+            } else if (entry.line_index as u64) < app.preview.scroll {
+                app.preview.scroll = entry.line_index as u64;
             }
 
             if entry.line_index < text.lines.len() {
@@ -406,7 +406,7 @@ fn render_preview(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     }
 
-    let paragraph = Paragraph::new(text).scroll((app.preview_scroll as u16, 0));
+    let paragraph = Paragraph::new(text).scroll((app.preview.scroll as u16, 0));
 
     frame.render_widget(block, area);
     frame.render_widget(paragraph, inner);

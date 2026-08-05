@@ -1,25 +1,18 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use nucleo_matcher::{Matcher, Config};
-use ratatui::text::Text;
 use ratatui::widgets::ListState;
 
 use crate::config;
-use crate::preview::PreviewEntry;
 use crate::walker::DirEntryItem;
 use crate::zoxide;
 
 use super::grep;
+use super::navigation;
+use super::preview_state::PreviewState;
 use super::score;
-
-struct SearchResult {
-    generation: u64,
-    root: PathBuf,
-    entries: Vec<DirEntryItem>,
-}
+use super::search::SearchState;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
@@ -71,12 +64,7 @@ pub struct App {
 
     pub zoxide_cache: Vec<PathBuf>,
     zoxide_initial_visible: bool,
-    pub preview_text: Text<'static>,
-    pub preview_contents: Text<'static>,
-    pub preview_dirty: bool,
-    pub preview_scroll: u64,
-    pub preview_entries: Vec<PreviewEntry>,
-    pub preview_selection: usize,
+    pub preview: PreviewState,
 
     pub matcher: Matcher,
     pub scratch: Vec<char>,
@@ -86,15 +74,7 @@ pub struct App {
     pub grep_search_root: PathBuf,
     pub grep_debounce_ms: u64,
 
-    pub find_debounce_ms: u64,
-    pub find_cache: Vec<DirEntryItem>,
-    pub find_cache_root: PathBuf,
-    pub find_cache_loaded: bool,
-    pub find_deadline: Option<Instant>,
-    pub search_generation: u64,
-    pub search_cancel: Option<Arc<AtomicBool>>,
-    search_results_tx: mpsc::Sender<SearchResult>,
-    search_results: mpsc::Receiver<SearchResult>,
+    pub search: SearchState,
 
     pub tick: u64,
     pub last_esc_time: Option<Instant>,
@@ -111,12 +91,12 @@ impl App {
         let cursor_pos = query.len();
         let zoxide_initial_visible = query.is_empty();
 
-        let (search_tx, search_results) = mpsc::channel();
-        let find_deadline = if query.is_empty() {
-            None
-        } else {
-            Some(Instant::now() + Duration::from_millis(cfg.find_debounce_ms))
-        };
+        let mut search = SearchState::new(cfg.find_debounce_ms);
+        if !query.is_empty() {
+            search.find_deadline = Some(
+                Instant::now() + Duration::from_millis(cfg.find_debounce_ms),
+            );
+        }
 
         Ok(Self {
             current_dir,
@@ -142,12 +122,7 @@ impl App {
 
             zoxide_cache,
             zoxide_initial_visible,
-            preview_text: Text::default(),
-            preview_contents: Text::default(),
-            preview_dirty: false,
-            preview_scroll: 0,
-            preview_entries: Vec::new(),
-            preview_selection: 0,
+            preview: PreviewState::new(),
 
             matcher: Matcher::new(Config::DEFAULT.match_paths()),
             scratch: Vec::new(),
@@ -157,15 +132,7 @@ impl App {
             grep_search_root: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
             grep_debounce_ms: cfg.grep_debounce_ms,
 
-            find_debounce_ms: cfg.find_debounce_ms,
-            find_cache: Vec::new(),
-            find_cache_root: PathBuf::new(),
-            find_cache_loaded: false,
-            find_deadline,
-            search_generation: 0,
-            search_cancel: None,
-            search_results_tx: search_tx,
-            search_results,
+            search,
 
             tick: 0,
             last_esc_time: None,
@@ -214,34 +181,29 @@ impl App {
         self.filtered_indices = (0..self.items.len()).collect();
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
-            self.preview_dirty = true;
+            self.preview.dirty = true;
         }
     }
 
     pub(crate) fn invalidate_find_cache(&mut self) {
-        self.search_generation = self.search_generation.wrapping_add(1);
-        self.cancel_search();
-        self.find_cache.clear();
-        self.find_cache_root.clear();
-        self.find_cache_loaded = false;
-        self.find_deadline = None;
+        self.search.invalidate();
     }
 
     pub fn apply_query(&mut self) {
         if self.mode == Mode::Grep {
-            self.cancel_search();
-            self.find_deadline = None;
+            self.search.cancel();
+            self.search.find_deadline = None;
             if !self.query.is_empty() {
                 self.grep_pending = true;
             }
             return;
         }
 
-        self.search_generation = self.search_generation.wrapping_add(1);
+        self.search.generation = self.search.generation.wrapping_add(1);
 
         if self.query.is_empty() {
-            self.cancel_search();
-            self.find_deadline = None;
+            self.search.cancel();
+            self.search.find_deadline = None;
             if self.mode == Mode::Find {
                 self.load_find_items();
             } else {
@@ -253,28 +215,26 @@ impl App {
             return;
         }
 
-        self.cancel_search();
-        self.find_deadline = Some(
-            Instant::now() + Duration::from_millis(self.find_debounce_ms),
-        );
+        self.search.set_deadline(&self.query);
     }
 
     pub fn start_find_search(&mut self) {
-        let Some(deadline) = self.find_deadline else {
-            return;
-        };
-        if Instant::now() < deadline {
+        if !self.search.is_due() {
             return;
         }
-        self.find_deadline = None;
+        self.search.find_deadline = None;
 
         if self.query.is_empty() {
             return;
         }
 
         if self.mode == Mode::Find {
-            if self.find_cache_root != self.current_dir || !self.find_cache_loaded {
-                self.spawn_directory_search();
+            if self.search.find_cache_root != self.current_dir || !self.search.find_cache_loaded {
+                self.search.spawn_search(
+                    self.current_dir.clone(),
+                    self.show_dotfiles,
+                    self.show_winhidden,
+                );
             } else {
                 self.filter_find_cache();
             }
@@ -290,41 +250,14 @@ impl App {
         }
     }
 
-    fn spawn_directory_search(&mut self) {
-        let root = self.current_dir.clone();
-        let show_dotfiles = self.show_dotfiles;
-        let show_winhidden = self.show_winhidden;
-        let generation = self.search_generation;
-        let cancel = Arc::new(AtomicBool::new(false));
-        let worker_cancel = Arc::clone(&cancel);
-        let sender = self.search_results_tx.clone();
-
-        self.search_cancel = Some(cancel);
-        std::thread::spawn(move || {
-            let entries = crate::walker::recursive_dir_search(
-                &root,
-                show_dotfiles,
-                show_winhidden,
-                &worker_cancel,
-            );
-            if !worker_cancel.load(Ordering::Relaxed) {
-                let _ = sender.send(SearchResult {
-                    generation,
-                    root,
-                    entries,
-                });
-            }
-        });
-    }
-
     fn filter_find_cache(&mut self) {
-        let mut scored = score::score_items(&self.query, &self.find_cache, &mut self.matcher, &mut self.scratch);
+        let mut scored = score::score_items(&self.query, &self.search.find_cache, &mut self.matcher, &mut self.scratch);
         scored.truncate(200);
 
         let top_indices: Vec<usize> = scored.into_iter().map(|(i, _)| i).collect();
         self.items = top_indices
             .iter()
-            .map(|&i| self.find_cache[i].clone())
+            .map(|&i| self.search.find_cache[i].clone())
             .collect();
         self.filtered_indices = (0..self.items.len()).collect();
 
@@ -334,66 +267,21 @@ impl App {
     }
 
     pub fn receive_search_results(&mut self) {
-        while let Ok(result) = self.search_results.try_recv() {
-            if self.mode != Mode::Find
-                || self.query.is_empty()
-                || result.generation != self.search_generation
-                || result.root != self.current_dir
-            {
-                continue;
-            }
-
-            self.find_cache = result.entries;
-            self.find_cache_root = result.root;
-            self.find_cache_loaded = true;
-            self.search_cancel = None;
+        if self.search.receive_results(&self.current_dir, &self.query) {
             self.filter_find_cache();
         }
     }
 
-    pub fn cancel_search(&mut self) {
-        if let Some(cancel) = self.search_cancel.take() {
-            cancel.store(true, Ordering::Relaxed);
-        }
-    }
-
     pub fn search_poll_timeout(&self) -> Duration {
-        let base = Duration::from_millis(50);
-        self.find_deadline
-            .map(|deadline| deadline.saturating_duration_since(Instant::now()).min(base))
-            .unwrap_or(base)
+        self.search.poll_timeout()
     }
 
     pub fn search_due(&self) -> bool {
-        self.find_deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
+        self.search.is_due()
     }
 
     pub(crate) fn reset_preview(&mut self) {
-        self.preview_text = Text::default();
-        self.preview_contents = Text::default();
-        self.preview_entries.clear();
-        self.preview_selection = 0;
-        self.preview_scroll = 0;
-    }
-
-    fn navigate_to(&mut self, directory: PathBuf) {
-        self.current_dir = directory;
-        if self.mode == Mode::Grep {
-            self.grep_search_root = self.current_dir.clone();
-        }
-
-        self.reset_preview();
-        self.invalidate_find_cache();
-        self.items.clear();
-        self.filtered_indices.clear();
-        self.list_state.select(None);
-        self.grep_results.clear();
-        self.grep_pending = false;
-
-        self.refresh_items();
-        self.apply_query();
-        self.preview_dirty = true;
+        self.preview.reset();
     }
 
     pub fn handle_enter(&mut self) {
@@ -416,125 +304,40 @@ impl App {
                     self.reset_preview();
                     self.invalidate_find_cache();
                     self.refresh_items();
-                    self.preview_dirty = true;
+                    self.preview.dirty = true;
                 }
             }
             Mode::Search | Mode::Grep => {
-                self.navigate_to_parent(&item);
-            }
-        }
-    }
-
-    fn navigate_to_parent(&mut self, item: &DirEntryItem) {
-        if let Some(parent) = item.full_path.parent() {
-            if parent.exists() {
-                self.current_dir = parent.to_path_buf();
-                self.query.clear();
-                self.cursor_pos = 0;
-                self.reset_preview();
-                self.mode = Mode::Find;
-                self.invalidate_find_cache();
-                self.refresh_items();
-                self.preview_dirty = true;
+                navigation::navigate_to_parent(self, &item);
             }
         }
     }
 
     pub fn handle_esc(&mut self) {
-        if let Some(last) = self.last_esc_time {
-            if last.elapsed() < Duration::from_millis(300) {
-                self.last_esc_time = None;
-                if let Some(home) = dirs::home_dir() {
-                    self.navigate_to(home);
-                }
-                return;
-            }
-        }
-        self.last_esc_time = Some(Instant::now());
-        if let Some(parent) = self.current_dir.parent() {
-            if parent.as_os_str().is_empty() {
-                self.should_quit = true;
-            } else {
-                let parent = parent.to_path_buf();
-                if parent.exists() {
-                    self.navigate_to(parent);
-                }
-            }
-        } else {
-            self.should_quit = true;
-        }
+        navigation::handle_esc(self);
     }
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
-        if self.popup.is_some() {
-            self.handle_popup_key(key);
-            return;
-        }
-
-        if self.handle_config_key(&key) {
-            return;
-        }
-
-        use crossterm::event::KeyCode;
-
-        match (self.focus, key.code) {
-            (Focus::List, KeyCode::Up) => self.list_nav_up(),
-            (Focus::List, KeyCode::Down) => self.list_nav_down(),
-            (Focus::List, KeyCode::PageUp) => self.preview_scroll = self.preview_scroll.saturating_sub(10),
-            (Focus::List, KeyCode::PageDown) => self.preview_scroll = self.preview_scroll.saturating_add(10),
-            (Focus::List, KeyCode::Enter) => self.handle_enter(),
-            (Focus::List, _) => self.handle_list_key(key),
-            (Focus::Preview, _) => self.handle_preview_key(key),
-        }
+        super::input::handle_key(self, key);
     }
 
-    fn list_nav_up(&mut self) {
+    pub(crate) fn list_nav_up(&mut self) {
         let i = self.list_state.selected().unwrap_or(0);
         if i > 0 {
             self.list_state.select(Some(i - 1));
-            self.preview_dirty = true;
+            self.preview.dirty = true;
         }
     }
 
-    fn list_nav_down(&mut self) {
+    pub(crate) fn list_nav_down(&mut self) {
         let i = self.list_state.selected().unwrap_or(0);
         if i + 1 < self.filtered_indices.len() {
             self.list_state.select(Some(i + 1));
-            self.preview_dirty = true;
+            self.preview.dirty = true;
         }
     }
 
-    fn handle_popup_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-
-        match self.popup {
-            Some(Popup::ToolSelector) => {
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if self.popup_index > 0 {
-                            self.popup_index -= 1;
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        let tool_count = crate::config::get().tool_selector.len();
-                        if tool_count > 0 && self.popup_index < tool_count - 1 {
-                            self.popup_index += 1;
-                        }
-                    }
-                    KeyCode::Enter => {
-                        self.execute_tool_from_popup();
-                    }
-                    KeyCode::Esc | KeyCode::Char('q') => {
-                        self.popup = None;
-                    }
-                    _ => {}
-                }
-            }
-            None => {}
-        }
-    }
-
-    fn execute_tool_from_popup(&mut self) {
+    pub(crate) fn execute_tool_from_popup(&mut self) {
         let dir = self.get_selected_dir();
         let tools = &crate::config::get().tool_selector;
         let tool = match tools.get(self.popup_index) {
@@ -557,114 +360,8 @@ impl App {
             None
         }
     }
-    fn handle_preview_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::{KeyCode, KeyModifiers};
 
-        match key.code {
-            KeyCode::Up => {
-                if self.preview_selection > 0 {
-                    self.preview_selection -= 1;
-                }
-            }
-            KeyCode::Down => {
-                if self.preview_selection + 1 < self.preview_entries.len() {
-                    self.preview_selection += 1;
-                }
-            }
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(idx) = self.list_state.selected() {
-                    if let Some(&item_idx) = self.filtered_indices.get(idx) {
-                        if let Some(item) = self.items.get(item_idx) {
-                            if item.is_dir {
-                                self.popup = Some(Popup::ToolSelector);
-                                self.popup_index = 0;
-                            }
-                        }
-                    }
-                }
-            }
-            KeyCode::Enter => {
-                if let Some(entry) = self.preview_entries.get(self.preview_selection) {
-                    if entry.is_dir && entry.full_path.is_dir() {
-                        self.current_dir = entry.full_path.clone();
-                        self.query.clear();
-                        self.cursor_pos = 0;
-                        self.reset_preview();
-                        self.focus = Focus::List;
-                        self.invalidate_find_cache();
-                        self.refresh_items();
-                        self.preview_dirty = true;
-                    }
-                }
-            }
-            KeyCode::Left | KeyCode::Esc => {
-                self.focus = Focus::List;
-            }
-            KeyCode::Tab => {
-                self.focus = Focus::List;
-                self.switch_mode();
-            }
-            KeyCode::Char(c) => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.handle_config_key(&key);
-                } else {
-                    self.query.insert(self.cursor_pos, c);
-                    self.cursor_pos += 1;
-                    self.apply_query();
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_list_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::{KeyCode, KeyModifiers};
-
-        match key.code {
-            KeyCode::Left => {
-                if self.cursor_pos > 0 {
-                    self.cursor_pos -= 1;
-                }
-            }
-            KeyCode::Right => {
-                let has_preview = !self.preview_text.lines.is_empty()
-                    || !self.preview_contents.lines.is_empty();
-                if has_preview {
-                    self.focus = Focus::Preview;
-                } else if self.cursor_pos < self.query.len() {
-                    self.cursor_pos += 1;
-                }
-            }
-            KeyCode::Home => {
-                self.cursor_pos = 0;
-            }
-            KeyCode::End => {
-                self.cursor_pos = self.query.len();
-            }
-            KeyCode::Backspace => {
-                if self.cursor_pos > 0 {
-                    self.query.remove(self.cursor_pos - 1);
-                    self.cursor_pos -= 1;
-                    self.apply_query();
-                }
-            }
-            KeyCode::Char(c) => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.handle_config_key(&key);
-                } else {
-                    self.query.insert(self.cursor_pos, c);
-                    self.cursor_pos += 1;
-                    self.apply_query();
-                }
-            }
-            KeyCode::Esc => {
-                self.handle_esc();
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_config_key(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+    pub(crate) fn handle_config_key(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         let action = crate::config::get().keys.match_action(key);
         match action {
             Some(action) => super::actions::execute_action(self, action),
@@ -673,9 +370,9 @@ impl App {
     }
 
     pub fn switch_mode(&mut self) {
-        self.search_generation = self.search_generation.wrapping_add(1);
-        self.cancel_search();
-        self.find_deadline = None;
+        self.search.generation = self.search.generation.wrapping_add(1);
+        self.search.cancel();
+        self.search.find_deadline = None;
         self.mode = match self.mode {
             Mode::Find => Mode::Search,
             Mode::Search => Mode::Grep,
@@ -698,7 +395,7 @@ impl App {
 
         self.refresh_items();
         self.apply_query();
-        self.preview_dirty = true;
+        self.preview.dirty = true;
     }
 
     pub fn toggle_winhidden(&mut self) {

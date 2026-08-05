@@ -49,7 +49,7 @@ pub fn execute_action(app: &mut App, action: &str) -> bool {
                 app.reset_preview();
                 app.invalidate_find_cache();
                 app.refresh_items();
-                app.preview_dirty = true;
+                app.preview.dirty = true;
             }
             true
         }

@@ -34,15 +34,15 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
                     }
                 }
                 Event::Mouse(mouse) => {
-                    if app.preview_text.lines.is_empty() {
+                    if app.preview.text.lines.is_empty() {
                         continue;
                     }
                     match mouse.kind {
                         MouseEventKind::ScrollDown => {
-                            app.preview_scroll = app.preview_scroll.saturating_add(3);
+                            app.preview.scroll = app.preview.scroll.saturating_add(3);
                         }
                         MouseEventKind::ScrollUp => {
-                            app.preview_scroll = app.preview_scroll.saturating_sub(3);
+                            app.preview.scroll = app.preview.scroll.saturating_sub(3);
                         }
                         _ => {}
                     }
@@ -55,25 +55,25 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
             app.start_find_search();
         }
 
-        if app.preview_dirty {
-            app.preview_scroll = 0;
-            app.preview_entries.clear();
-            app.preview_selection = 0;
+        if app.preview.dirty {
+            app.preview.scroll = 0;
+            app.preview.entries.clear();
+            app.preview.selection = 0;
             if let Some(idx) = app.list_state.selected() {
                 if let Some(&item_idx) = app.filtered_indices.get(idx) {
                     if let Some(item) = app.items.get(item_idx) {
-                        app.preview_text = crate::preview::generate(&app, item);
+                        app.preview.text = crate::preview::generate(&app, item);
                         if item.is_dir {
                             let full_path = app.current_dir.join(&item.rel_path);
-                            app.preview_contents = crate::preview::commands::directory_contents(&full_path);
-                            app.preview_entries = crate::preview::generate_entries(&app, item);
+                            app.preview.contents = crate::preview::commands::directory_contents(&full_path);
+                            app.preview.entries = crate::preview::generate_entries(&app, item);
                         } else {
-                            app.preview_contents = Text::default();
+                            app.preview.contents = Text::default();
                         }
                     }
                 }
             }
-            app.preview_dirty = false;
+            app.preview.dirty = false;
         }
 
         // Handle inline tool spawning
@@ -91,7 +91,7 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
 
             terminal = ratatui::init();
             execute!(stdout(), crossterm::event::EnableMouseCapture)?;
-            app.preview_dirty = true;
+            app.preview.dirty = true;
         }
     }
 
