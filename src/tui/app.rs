@@ -3,8 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Matcher, Config, Utf32Str};
+use nucleo_matcher::{Matcher, Config};
 use ratatui::text::Text;
 use ratatui::widgets::ListState;
 
@@ -14,6 +13,7 @@ use crate::walker::DirEntryItem;
 use crate::zoxide;
 
 use super::grep;
+use super::score;
 
 struct SearchResult {
     generation: u64,
@@ -218,7 +218,7 @@ impl App {
         }
     }
 
-    fn invalidate_find_cache(&mut self) {
+    pub(crate) fn invalidate_find_cache(&mut self) {
         self.search_generation = self.search_generation.wrapping_add(1);
         self.cancel_search();
         self.find_cache.clear();
@@ -282,24 +282,7 @@ impl App {
         }
 
         // Search mode: score current items
-        let pattern = Pattern::parse(
-            &self.query,
-            CaseMatching::Ignore,
-            Normalization::Smart,
-        );
-
-        let mut scored: Vec<(usize, u32)> = self
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(i, item)| {
-                self.scratch.clear();
-                let haystack = Utf32Str::new(item.display.as_str(), &mut self.scratch);
-                pattern.score(haystack, &mut self.matcher).map(|s| (i, s))
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        let scored = score::score_items(&self.query, &self.items, &mut self.matcher, &mut self.scratch);
         self.filtered_indices = scored.into_iter().map(|(i, _)| i).collect();
 
         if !self.filtered_indices.is_empty() {
@@ -335,24 +318,7 @@ impl App {
     }
 
     fn filter_find_cache(&mut self) {
-        let pattern = Pattern::parse(
-            &self.query,
-            CaseMatching::Ignore,
-            Normalization::Smart,
-        );
-
-        let mut scored: Vec<(usize, u32)> = self
-            .find_cache
-            .iter()
-            .enumerate()
-            .filter_map(|(i, item)| {
-                self.scratch.clear();
-                let haystack = Utf32Str::new(item.display.as_str(), &mut self.scratch);
-                pattern.score(haystack, &mut self.matcher).map(|s| (i, s))
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut scored = score::score_items(&self.query, &self.find_cache, &mut self.matcher, &mut self.scratch);
         scored.truncate(200);
 
         let top_indices: Vec<usize> = scored.into_iter().map(|(i, _)| i).collect();
@@ -403,7 +369,7 @@ impl App {
             .is_some_and(|deadline| Instant::now() >= deadline)
     }
 
-    fn reset_preview(&mut self) {
+    pub(crate) fn reset_preview(&mut self) {
         self.preview_text = Text::default();
         self.preview_contents = Text::default();
         self.preview_entries.clear();
@@ -511,18 +477,14 @@ impl App {
 
         use crossterm::event::KeyCode;
 
-        match self.focus {
-            Focus::List => {
-                match key.code {
-                    KeyCode::Up => self.list_nav_up(),
-                    KeyCode::Down => self.list_nav_down(),
-                    KeyCode::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(10),
-                    KeyCode::PageDown => self.preview_scroll = self.preview_scroll.saturating_add(10),
-                    KeyCode::Enter => self.handle_enter(),
-                    _ => self.handle_list_key(key),
-                }
-            }
-            Focus::Preview => self.handle_preview_key(key),
+        match (self.focus, key.code) {
+            (Focus::List, KeyCode::Up) => self.list_nav_up(),
+            (Focus::List, KeyCode::Down) => self.list_nav_down(),
+            (Focus::List, KeyCode::PageUp) => self.preview_scroll = self.preview_scroll.saturating_sub(10),
+            (Focus::List, KeyCode::PageDown) => self.preview_scroll = self.preview_scroll.saturating_add(10),
+            (Focus::List, KeyCode::Enter) => self.handle_enter(),
+            (Focus::List, _) => self.handle_list_key(key),
+            (Focus::Preview, _) => self.handle_preview_key(key),
         }
     }
 
@@ -585,7 +547,7 @@ impl App {
         }
     }
 
-    fn get_selected_dir(&self) -> Option<PathBuf> {
+    pub(crate) fn get_selected_dir(&self) -> Option<PathBuf> {
         let idx = self.list_state.selected()?;
         let item_idx = self.filtered_indices.get(idx)?;
         let item = self.items.get(*item_idx)?;
@@ -703,53 +665,10 @@ impl App {
     }
 
     fn handle_config_key(&mut self, key: &crossterm::event::KeyEvent) -> bool {
-        use crate::config;
-        let action = config::get().keys.match_action(key);
+        let action = crate::config::get().keys.match_action(key);
         match action {
-            Some("quit") => { self.should_quit = true; true }
-            Some("toggle_dotfiles") => {
-                self.show_dotfiles = !self.show_dotfiles;
-                self.invalidate_find_cache();
-                self.refresh_items();
-                self.apply_query();
-                true
-            }
-            Some("toggle_winhidden") => {
-                self.invalidate_find_cache();
-                self.toggle_winhidden();
-                self.apply_query();
-                true
-            }
-            Some("open_settings") => {
-                let cfg_path = dirs::home_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join(".config")
-                    .join("cdx")
-                    .join("config.toml");
-                self.spawn_pending = Some(("nvim".to_string(), cfg_path));
-                true
-            }
-            Some("switch_mode") => { self.switch_mode(); true }
-            Some("open_explorer") => {
-                if self.get_selected_dir().is_some() {
-                    self.popup = Some(Popup::ToolSelector);
-                    self.popup_index = 0;
-                }
-                true
-            }
-            Some("go_home") => {
-                if let Some(home) = dirs::home_dir() {
-                    self.current_dir = home;
-                    self.query.clear();
-                    self.cursor_pos = 0;
-                    self.reset_preview();
-                    self.invalidate_find_cache();
-                    self.refresh_items();
-                    self.preview_dirty = true;
-                }
-                true
-            }
-            _ => false,
+            Some(action) => super::actions::execute_action(self, action),
+            None => false,
         }
     }
 
@@ -801,47 +720,17 @@ impl App {
         }
 
         let root = self.grep_search_root.clone();
-        let output = grep::run_rg_command(&root, &self.query, self.show_winhidden, self.show_dotfiles, true);
+        let (results, items) = grep::execute_search(
+            &self.query,
+            &root,
+            self.show_winhidden,
+            self.show_dotfiles,
+        );
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // Detect if rg supports --json: first non-empty line should start with '{'
-        let is_json = stdout.lines().find(|l| !l.is_empty()).is_some_and(|l| l.starts_with('{'));
-
-        if is_json {
-            self.grep_results = grep::parse_rg_json(&stdout);
-        } else {
-            // Fallback: rg < 13.0.0 doesn't support --json, re-run with --vimgrep
-            let fallback = grep::run_rg_command(&root, &self.query, self.show_winhidden, self.show_dotfiles, false);
-            let fallback_stdout = String::from_utf8_lossy(&fallback.stdout);
-            self.grep_results = grep::parse_rg_vimgrep(&fallback_stdout);
-        }
-
-        self.items = self
-            .grep_results
-            .iter()
-            .map(|m| {
-                let full_path = if std::path::Path::new(&m.file_path).is_absolute() {
-                    std::path::PathBuf::from(&m.file_path)
-                } else {
-                    root.join(&m.file_path)
-                };
-                let display_path = if let Ok(rel) = std::path::Path::new(&m.file_path).strip_prefix(&root) {
-                    rel.to_string_lossy().replace('\\', "/")
-                } else {
-                    m.file_path.clone()
-                };
-                DirEntryItem {
-                    display: format!("{}:{}", display_path, m.line_number),
-                    rel_path: full_path.to_string_lossy().replace('\\', "/"),
-                    full_path,
-                    is_zoxide: false,
-                    is_dir: false,
-                }
-            })
-            .collect();
-
+        self.grep_results = results;
+        self.items = items;
         self.filtered_indices = (0..self.items.len()).collect();
+
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
         }

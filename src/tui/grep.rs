@@ -1,4 +1,7 @@
+use std::path::{Path, PathBuf};
+
 use crate::config;
+use crate::walker::DirEntryItem;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -88,4 +91,55 @@ pub fn parse_rg_vimgrep(stdout: &str) -> Vec<GrepMatch> {
             })
         })
         .collect()
+}
+
+pub fn to_dir_entries(results: &[GrepMatch], root: &Path) -> Vec<DirEntryItem> {
+    results
+        .iter()
+        .map(|m| {
+            let full_path = if Path::new(&m.file_path).is_absolute() {
+                PathBuf::from(&m.file_path)
+            } else {
+                root.join(&m.file_path)
+            };
+            let display_path = if let Ok(rel) = Path::new(&m.file_path).strip_prefix(root) {
+                rel.to_string_lossy().replace('\\', "/")
+            } else {
+                m.file_path.clone()
+            };
+            DirEntryItem {
+                display: format!("{}:{}", display_path, m.line_number),
+                rel_path: full_path.to_string_lossy().replace('\\', "/"),
+                full_path,
+                is_zoxide: false,
+                is_dir: false,
+            }
+        })
+        .collect()
+}
+
+pub fn execute_search(
+    query: &str,
+    root: &Path,
+    show_winhidden: bool,
+    show_dotfiles: bool,
+) -> (Vec<GrepMatch>, Vec<DirEntryItem>) {
+    let output = run_rg_command(root, query, show_winhidden, show_dotfiles, true);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Detect if rg supports --json: first non-empty line should start with '{'
+    let is_json = stdout.lines().find(|l| !l.is_empty()).is_some_and(|l| l.starts_with('{'));
+
+    let results = if is_json {
+        parse_rg_json(&stdout)
+    } else {
+        // Fallback: rg < 13.0.0 doesn't support --json, re-run with --vimgrep
+        let fallback = run_rg_command(root, query, show_winhidden, show_dotfiles, false);
+        let fallback_stdout = String::from_utf8_lossy(&fallback.stdout);
+        parse_rg_vimgrep(&fallback_stdout)
+    };
+
+    let items = to_dir_entries(&results, root);
+    (results, items)
 }
