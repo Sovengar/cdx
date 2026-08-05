@@ -15,6 +15,7 @@ anyhow = "1"
 thiserror = "1"
 ansi-to-tui = "8"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.8"
 
 [profile.release]

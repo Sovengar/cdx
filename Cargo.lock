@@ -187,6 +187,7 @@ dependencies = [
  "nucleo-matcher",
  "ratatui",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "toml",
 ]
