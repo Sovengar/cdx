@@ -1,5 +1,6 @@
 pub mod app;
 pub mod events;
+pub mod grep;
 pub mod ui;
 
 pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<std::path::PathBuf>> {

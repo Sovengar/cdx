@@ -4,6 +4,7 @@ mod tui;
 mod walker;
 mod preview;
 mod search;
+mod ui;
 mod zoxide;
 
 use std::path::Path;

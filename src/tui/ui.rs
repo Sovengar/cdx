@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -7,7 +5,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragr
 use ratatui::Frame;
 
 use super::app::{App, Focus, Mode, Popup};
-use crate::walker::DirEntryItem;
+use crate::ui::icons::{icon_for_item, style_for_item};
+use crate::preview::git;
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -84,51 +83,6 @@ fn layout_inner(area: Rect) -> ([Rect; 4], [Rect; 2]) {
     (outer, main)
 }
 
-fn icon_for(item: &DirEntryItem) -> &'static str {
-    if item.is_zoxide {
-        return "★";
-    }
-    if item.is_dir {
-        return "";
-    }
-    match Path::new(&item.display)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-    {
-        "rs" => "",
-        "toml" | "yml" | "yaml" | "json" => "",
-        "md" | "txt" => "",
-        "ps1" | "sh" | "bat" | "cmd" => "",
-        "exe" | "dll" => "",
-        "png" | "jpg" | "jpeg" | "gif" | "svg" | "ico" => "",
-        "gitignore" | "gitattributes" | "gitmodules" => "",
-        _ => "",
-    }
-}
-
-fn style_for(item: &DirEntryItem) -> Style {
-    if item.is_zoxide {
-        return Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-    }
-    if item.is_dir {
-        return Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-    }
-    match Path::new(&item.display)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-    {
-        "rs" => Style::default().fg(Color::LightBlue),
-        "toml" | "yml" | "yaml" | "json" => Style::default().fg(Color::LightRed),
-        "md" | "txt" => Style::default().fg(Color::LightYellow),
-        "ps1" | "sh" | "bat" => Style::default().fg(Color::LightGreen),
-        "exe" | "dll" => Style::default().fg(Color::LightCyan),
-        "png" | "jpg" | "jpeg" | "gif" | "svg" => Style::default().fg(Color::LightMagenta),
-        _ => Style::default().fg(Color::White),
-    }
-}
-
 fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
     let focus_fg = if app.focus == Focus::List {
         Color::Yellow
@@ -160,8 +114,8 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
         .iter()
         .filter_map(|&i| app.items.get(i))
         .map(|item| {
-            let icon = icon_for(item);
-            let style = style_for(item);
+            let icon = icon_for_item(item);
+            let style = style_for_item(item);
             let display = format!("{} {}", icon, item.display);
             ListItem::new(display).style(style)
         })
@@ -364,8 +318,8 @@ fn render_info(frame: &mut Frame, area: Rect, app: &mut App) {
         if let Some(&item_idx) = app.filtered_indices.get(idx) {
             if let Some(item) = app.items.get(item_idx) {
                 lines.push(Line::from(Span::styled(
-                    format!(" {} {}", icon_for(item), item.display),
-                    style_for(item),
+                    format!(" {} {}", icon_for_item(item), item.display),
+                    style_for_item(item),
                 )));
                 if let Ok(meta) = std::fs::metadata(&item.full_path) {
                     if meta.is_file() {
@@ -397,34 +351,8 @@ fn render_info(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 
     // Git info
-    let git_toplevel = std::process::Command::new("git")
-        .args(["-C", &app.current_dir.to_string_lossy(), "rev-parse", "--show-toplevel"])
-        .output()
-        .ok();
-    if let Some(out) = git_toplevel {
-        if out.status.success() {
-            let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let branch = std::process::Command::new("git")
-                .args(["-C", &app.current_dir.to_string_lossy(), "rev-parse", "--abbrev-ref", "HEAD"])
-                .output()
-                .ok()
-                .and_then(|o| if o.status.success() { Some(String::from_utf8_lossy(&o.stdout).trim().to_string()) } else { None });
-            let status = std::process::Command::new("git")
-                .args(["-C", &app.current_dir.to_string_lossy(), "status", "--porcelain"])
-                .output()
-                .ok();
-            let dirty = status.map_or(false, |o| !o.stdout.is_empty());
-            let display_path = display_path(&std::path::PathBuf::from(&top));
-            lines.push(Line::from(Span::styled(" git:", Style::default().fg(header_fg()).add_modifier(Modifier::BOLD))));
-            lines.push(Line::from(Span::styled(format!("  {}", display_path), Style::default().fg(Color::Cyan))));
-            if let Some(b) = branch {
-                lines.push(Line::from(Span::styled(
-                    format!("  {} ({})", b, if dirty { "dirty" } else { "clean" }),
-                    if dirty { Style::default().fg(Color::LightRed) } else { Style::default().fg(Color::LightGreen) },
-                )));
-            }
-        }
-    }
+    let home = dirs::home_dir();
+    lines.extend(git::git_info_lines(&app.current_dir, home.as_deref()));
 
     frame.render_widget(Paragraph::new(lines), inner);
 }

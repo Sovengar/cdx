@@ -65,7 +65,7 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
                         app.preview_text = crate::preview::generate(&app, item);
                         if item.is_dir {
                             let full_path = app.current_dir.join(&item.rel_path);
-                            app.preview_contents = crate::preview::directory_contents(&full_path);
+                            app.preview_contents = crate::preview::commands::directory_contents(&full_path);
                             app.preview_entries = crate::preview::generate_entries(&app, item);
                         } else {
                             app.preview_contents = Text::default();

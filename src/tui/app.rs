@@ -13,6 +13,8 @@ use crate::preview::PreviewEntry;
 use crate::walker::DirEntryItem;
 use crate::zoxide;
 
+use super::grep;
+
 struct SearchResult {
     generation: u64,
     root: PathBuf,
@@ -43,14 +45,6 @@ pub enum ExitAction {
     OutputPath(PathBuf),
     SpawnTool { command: String, path: PathBuf },
     JustExit,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct GrepMatch {
-    pub file_path: String,
-    pub line_number: u32,
-    pub match_text: String,
 }
 
 pub struct App {
@@ -88,7 +82,7 @@ pub struct App {
     pub scratch: Vec<char>,
 
     pub grep_pending: bool,
-    pub grep_results: Vec<GrepMatch>,
+    pub grep_results: Vec<grep::GrepMatch>,
     pub grep_search_root: PathBuf,
     pub grep_debounce_ms: u64,
 
@@ -818,7 +812,7 @@ impl App {
         }
 
         let root = self.grep_search_root.clone();
-        let output = self.run_rg_command(&root, true);
+        let output = grep::run_rg_command(&root, &self.query, self.show_winhidden, self.show_dotfiles, true);
 
         let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -826,12 +820,12 @@ impl App {
         let is_json = stdout.lines().find(|l| !l.is_empty()).is_some_and(|l| l.starts_with('{'));
 
         if is_json {
-            self.grep_results = self.parse_rg_json(&stdout);
+            self.grep_results = grep::parse_rg_json(&stdout);
         } else {
             // Fallback: rg < 13.0.0 doesn't support --json, re-run with --vimgrep
-            let fallback = self.run_rg_command(&root, false);
+            let fallback = grep::run_rg_command(&root, &self.query, self.show_winhidden, self.show_dotfiles, false);
             let fallback_stdout = String::from_utf8_lossy(&fallback.stdout);
-            self.grep_results = self.parse_rg_vimgrep(&fallback_stdout);
+            self.grep_results = grep::parse_rg_vimgrep(&fallback_stdout);
         }
 
         self.items = self
@@ -862,82 +856,6 @@ impl App {
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
         }
-    }
-
-    fn run_rg_command(&self, root: &std::path::Path, json: bool) -> std::process::Output {
-        let mut cmd = std::process::Command::new("rg");
-        if json {
-            cmd.arg("--json");
-        } else {
-            cmd.arg("--vimgrep");
-        }
-        cmd.args(["--smart-case"]);
-        cmd.args(["--max-depth", &config::get().grep_max_depth.to_string()]);
-
-        for d in config::get().exclude_dirs.iter() {
-            cmd.args(["--glob", &format!("!{}", d)]);
-        }
-        for p in config::get().exclude_path_globs.iter() {
-            cmd.args(["--glob", &format!("!{}", p)]);
-        }
-        if !self.show_winhidden {
-            for d in config::get().exclude_win_dirs.iter() {
-                cmd.args(["--glob", &format!("!{}", d)]);
-            }
-        }
-        if !self.show_dotfiles {
-            cmd.args(["--glob", "!.*"]);
-        }
-
-        cmd.arg(&self.query).arg(root);
-
-        cmd.output()
-            .unwrap_or_else(|_| std::process::Output {
-                status: std::process::ExitStatus::default(),
-                stdout: Vec::new(),
-                stderr: Vec::new(),
-            })
-    }
-
-    fn parse_rg_json(&self, stdout: &str) -> Vec<GrepMatch> {
-        stdout
-            .lines()
-            .filter_map(|line| {
-                if line.is_empty() || !line.starts_with('{') {
-                    return None;
-                }
-                let v: serde_json::Value = serde_json::from_str(line).ok()?;
-                if v.get("type")?.as_str()? != "match" {
-                    return None;
-                }
-                let data = v.get("data")?;
-                let file_path = data.get("path")?.get("text")?.as_str()?.to_string();
-                let line_number = data.get("line_number")?.as_u64()? as u32;
-                let match_text = data.get("lines")?.get("text")?.as_str()?.trim_end().to_string();
-                Some(GrepMatch {
-                    file_path,
-                    line_number,
-                    match_text,
-                })
-            })
-            .collect()
-    }
-
-    fn parse_rg_vimgrep(&self, stdout: &str) -> Vec<GrepMatch> {
-        stdout
-            .lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.splitn(4, ':').collect();
-                if parts.len() < 4 {
-                    return None;
-                }
-                Some(GrepMatch {
-                    file_path: parts[0].to_string(),
-                    line_number: parts[1].parse().unwrap_or(0),
-                    match_text: parts[3].to_string(),
-                })
-            })
-            .collect()
     }
 
     fn merge_zoxide(&mut self, mut walker_items: Vec<DirEntryItem>) -> Vec<DirEntryItem> {
