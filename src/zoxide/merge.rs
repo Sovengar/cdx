@@ -52,3 +52,139 @@ pub fn merge_with_dirs(
     result.extend(remaining);
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn home() -> PathBuf {
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
+    }
+
+    fn home_str() -> String {
+        home().to_string_lossy().replace('\\', "/")
+    }
+
+    fn make_zoxide_item(path: &str) -> PathBuf {
+        PathBuf::from(path)
+    }
+
+    fn make_walker_item(name: &str, path: &str) -> DirEntryItem {
+        DirEntryItem {
+            display: name.to_string(),
+            rel_path: name.to_string(),
+            full_path: PathBuf::from(path),
+            is_zoxide: false,
+            is_dir: true,
+        }
+    }
+
+    #[test]
+    fn test_merge_limits_zoxide_entries() {
+        let h = home_str();
+        let cache = vec![
+            make_zoxide_item(&format!("{}/a", h)),
+            make_zoxide_item(&format!("{}/b", h)),
+            make_zoxide_item(&format!("{}/c", h)),
+        ];
+        let current = home();
+        let result = merge_with_dirs(&cache, vec![], &current, 2);
+        let zoxide_count = result.iter().filter(|i| i.is_zoxide).count();
+        assert!(zoxide_count <= 2, "at most 2 zoxide entries");
+    }
+
+    #[test]
+    fn test_merge_excludes_current_dir() {
+        let current = home();
+        let cache = vec![make_zoxide_item(&current.to_string_lossy())];
+        let result = merge_with_dirs(&cache, vec![], &current, 5);
+        assert!(result.is_empty(), "current dir should be excluded from zoxide");
+    }
+
+    #[test]
+    fn test_merge_excludes_duplicates_with_walker() {
+        let h = home_str();
+        let current = home();
+        let cache = vec![make_zoxide_item(&format!("{}/projects", h))];
+        let walker = vec![make_walker_item("projects", &format!("{}/projects", h))];
+        let result = merge_with_dirs(&cache, walker, &current, 5);
+        let count = result.iter().filter(|i| i.display == "projects").count();
+        assert_eq!(count, 1, "should not duplicate dirs already in walker");
+    }
+
+    #[test]
+    fn test_merge_zoxide_appears_first() {
+        let h = home_str();
+        let current = home();
+        let cache = vec![make_zoxide_item(&format!("{}/zz-top", h))];
+        let walker = vec![make_walker_item("aaa", &format!("{}/aaa", h))];
+        let result = merge_with_dirs(&cache, walker, &current, 5);
+        assert_eq!(result.len(), 2);
+        assert!(result[0].is_zoxide, "zoxide should come first");
+        assert!(!result[1].is_zoxide);
+    }
+
+    #[test]
+    fn test_merge_empty_cache_only_walker() {
+        let h = home_str();
+        let current = home();
+        let walker = vec![
+            make_walker_item("a", &format!("{}/a", h)),
+            make_walker_item("b", &format!("{}/b", h)),
+        ];
+        let result = merge_with_dirs(&[], walker, &current, 5);
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|i| !i.is_zoxide));
+    }
+
+    #[test]
+    fn test_merge_empty_walker_only_zoxide() {
+        let h = home_str();
+        let current = home();
+        let cache = vec![make_zoxide_item(&format!("{}/config", h))];
+        let result = merge_with_dirs(&cache, vec![], &current, 5);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].is_zoxide);
+    }
+
+    #[test]
+    fn test_merge_all_empty() {
+        let current = home();
+        let result = merge_with_dirs(&[], vec![], &current, 5);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_merge_walker_items_always_included() {
+        let h = home_str();
+        let current = home();
+        let cache = vec![];
+        let walker = vec![
+            make_walker_item("alpha", &format!("{}/alpha", h)),
+            make_walker_item("beta", &format!("{}/beta", h)),
+        ];
+        let result = merge_with_dirs(&cache, walker, &current, 5);
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().any(|i| i.display == "alpha"));
+        assert!(result.iter().any(|i| i.display == "beta"));
+    }
+
+    #[test]
+    fn test_merge_walker_items_preserved_when_zoxide_exhausts_limit() {
+        let h = home_str();
+        let current = home();
+        let cache = vec![
+            make_zoxide_item(&format!("{}/z1", h)),
+            make_zoxide_item(&format!("{}/z2", h)),
+        ];
+        let walker = vec![
+            make_walker_item("w1", &format!("{}/w1", h)),
+            make_walker_item("w2", &format!("{}/w2", h)),
+        ];
+        let result = merge_with_dirs(&cache, walker, &current, 1);
+        let zoxide_count = result.iter().filter(|i| i.is_zoxide).count();
+        let walker_count = result.iter().filter(|i| !i.is_zoxide).count();
+        assert_eq!(zoxide_count, 1, "only 1 zoxide due to limit");
+        assert_eq!(walker_count, 2, "all walker items preserved");
+    }
+}

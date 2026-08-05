@@ -370,9 +370,7 @@ impl App {
     }
 
     pub fn switch_mode(&mut self) {
-        self.search.generation = self.search.generation.wrapping_add(1);
-        self.search.cancel();
-        self.search.find_deadline = None;
+        self.invalidate_find_cache();
         self.mode = match self.mode {
             Mode::Find => Mode::Search,
             Mode::Search => Mode::Grep,
@@ -431,5 +429,357 @@ impl App {
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config;
+    use std::fs;
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    fn setup_test_dir(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("cdx-app-test-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn cleanup(root: &Path) {
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_app_new_default_state() {
+        config::init();
+        let app = App::new(None).unwrap();
+        assert_eq!(app.mode, Mode::Find);
+        assert_eq!(app.focus, Focus::List);
+        assert!(app.popup.is_none());
+        assert!(!app.should_quit);
+        assert!(app.query.is_empty());
+        assert_eq!(app.cursor_pos, 0);
+    }
+
+    #[test]
+    fn test_app_new_with_initial_query() {
+        config::init();
+        let app = App::new(Some("hello".to_string())).unwrap();
+        assert_eq!(app.query, "hello");
+        assert_eq!(app.cursor_pos, 5);
+        assert!(!app.zoxide_initial_visible, "query present → zoxide hidden");
+    }
+
+    // ── Mode switching ──────────────────────────────────────────
+
+    #[test]
+    fn test_mode_cycle_find_to_search() {
+        config::init();
+        let root = setup_test_dir("cycle1");
+        fs::create_dir_all(root.join("sub")).unwrap();
+
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        app.zoxide_initial_visible = false;
+        app.refresh_items();
+        assert_eq!(app.mode, Mode::Find);
+
+        app.switch_mode();
+        assert_eq!(app.mode, Mode::Search);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_mode_cycle_search_to_grep() {
+        config::init();
+        let root = setup_test_dir("cycle2");
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        app.mode = Mode::Search;
+
+        app.switch_mode();
+        assert_eq!(app.mode, Mode::Grep);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_mode_cycle_grep_to_find() {
+        config::init();
+        let root = setup_test_dir("cycle3");
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        app.mode = Mode::Grep;
+
+        app.switch_mode();
+        assert_eq!(app.mode, Mode::Find);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_mode_cycle_full_round_trip() {
+        config::init();
+        let root = setup_test_dir("cycle-full");
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+
+        app.switch_mode(); // Find → Search
+        app.switch_mode(); // Search → Grep
+        app.switch_mode(); // Grep → Find
+        assert_eq!(app.mode, Mode::Find);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_grep_mode_disables_winhidden() {
+        config::init();
+        let root = setup_test_dir("grep-winhidden");
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        app.show_winhidden = true;
+
+        app.switch_mode(); // Find → Search
+        app.switch_mode(); // Search → Grep
+        assert!(!app.show_winhidden, "winhidden should be auto-disabled in grep");
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_switch_mode_cancels_search() {
+        config::init();
+        let root = setup_test_dir("switch-cancel");
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        app.search.cancel = Some(Arc::clone(&cancel));
+
+        app.switch_mode();
+        assert!(cancel.load(std::sync::atomic::Ordering::Relaxed), "search should be cancelled");
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_switch_mode_invalidates_cache() {
+        config::init();
+        let root = setup_test_dir("switch-invalidate");
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        // Manually populate cache to test invalidation
+        app.search.find_cache = vec![DirEntryItem {
+            display: "cached".into(),
+            rel_path: "cached".into(),
+            full_path: root.join("cached"),
+            is_zoxide: false,
+            is_dir: true,
+        }];
+        app.search.find_cache_root = root.clone();
+        app.search.find_cache_loaded = true;
+        let gen_before = app.search.generation;
+
+        app.switch_mode();
+        assert!(!app.search.find_cache_loaded, "cache should be invalidated");
+        assert!(app.search.find_cache.is_empty(), "cache entries should be cleared");
+        assert!(app.search.generation > gen_before, "generation should increment");
+        cleanup(&root);
+    }
+
+    // ── Enter behavior ──────────────────────────────────────────
+
+    #[test]
+    fn test_enter_find_mode_navigates_to_dir() {
+        config::init();
+        let root = setup_test_dir("enter-find");
+        fs::create_dir_all(root.join("target")).unwrap();
+
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        // Manually set up items to avoid zoxide side effects
+        let target = root.join("target");
+        app.items = vec![DirEntryItem {
+            display: "target".into(),
+            rel_path: "target".into(),
+            full_path: target.clone(),
+            is_zoxide: false,
+            is_dir: true,
+        }];
+        app.filtered_indices = vec![0];
+        app.list_state.select(Some(0));
+
+        app.handle_enter();
+        assert_eq!(app.current_dir, target);
+        assert!(app.query.is_empty(), "query should be cleared");
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_enter_find_mode_clears_query() {
+        config::init();
+        let root = setup_test_dir("enter-clear");
+        fs::create_dir_all(root.join("sub")).unwrap();
+
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        app.query = "sub".to_string();
+        app.cursor_pos = 3;
+        app.items = vec![DirEntryItem {
+            display: "sub".into(),
+            rel_path: "sub".into(),
+            full_path: root.join("sub"),
+            is_zoxide: false,
+            is_dir: true,
+        }];
+        app.filtered_indices = vec![0];
+        app.list_state.select(Some(0));
+
+        app.handle_enter();
+        assert!(app.query.is_empty());
+        assert_eq!(app.cursor_pos, 0);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_enter_no_selection_does_nothing() {
+        config::init();
+        let root = setup_test_dir("enter-noselect");
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        let original_dir = app.current_dir.clone();
+
+        app.handle_enter();
+        assert_eq!(app.current_dir, original_dir);
+        cleanup(&root);
+    }
+
+    // ── Esc behavior ────────────────────────────────────────────
+
+    #[test]
+    fn test_single_esc_navigates_to_parent() {
+        config::init();
+        let root = setup_test_dir("esc-parent");
+        fs::create_dir_all(root.join("child")).unwrap();
+
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.join("child");
+
+        app.handle_esc();
+        assert_eq!(app.current_dir, root);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_double_esc_navigates_to_home() {
+        config::init();
+        let root = setup_test_dir("esc-home");
+        fs::create_dir_all(root.join("deep").join("nested")).unwrap();
+
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.join("deep").join("nested");
+
+        app.handle_esc(); // first → goes to deep
+        app.handle_esc(); // rapid → goes to home
+
+        assert_eq!(app.current_dir, dirs::home_dir().unwrap());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_esc_from_root_sets_should_quit() {
+        config::init();
+        let root = setup_test_dir("esc-root");
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+
+        // Set last_esc_time to something old so double-esc doesn't trigger
+        app.last_esc_time = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+
+        // When parent is empty (root), should quit
+        // But our test dir has a parent, so let's test the actual root "/"
+        app.current_dir = PathBuf::from("/");
+        app.last_esc_time = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        app.handle_esc();
+        // "/" parent is empty → should_quit = true
+        assert!(app.should_quit);
+        cleanup(&root);
+    }
+
+    // ── Tool selector ───────────────────────────────────────────
+
+    #[test]
+    fn test_get_selected_dir_returns_dir() {
+        config::init();
+        let root = setup_test_dir("get-dir");
+        fs::create_dir_all(root.join("mydir")).unwrap();
+
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        app.zoxide_initial_visible = false;
+        app.refresh_items();
+        app.list_state.select(Some(0));
+
+        let dir = app.get_selected_dir();
+        assert!(dir.is_some());
+        assert_eq!(dir.unwrap(), root.join("mydir"));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_get_selected_dir_no_selection() {
+        config::init();
+        let app = App::new(None).unwrap();
+        assert!(app.get_selected_dir().is_none());
+    }
+
+    #[test]
+    fn test_execute_tool_from_popup() {
+        config::init();
+        let root = setup_test_dir("tool-popup");
+        fs::create_dir_all(root.join("mydir")).unwrap();
+
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        app.zoxide_initial_visible = false;
+        app.refresh_items();
+        app.list_state.select(Some(0));
+        app.popup = Some(Popup::ToolSelector);
+        app.popup_index = 0; // yazi
+
+        app.execute_tool_from_popup();
+        assert!(app.popup.is_none(), "popup should close");
+        assert!(app.spawn_pending.is_some(), "should have spawn pending");
+        let (cmd, path) = app.spawn_pending.unwrap();
+        assert_eq!(cmd, "yazi");
+        assert_eq!(path, root.join("mydir"));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn test_list_nav_up_down() {
+        config::init();
+        let root = setup_test_dir("nav-updown");
+        fs::create_dir_all(root.join("a")).unwrap();
+        fs::create_dir_all(root.join("b")).unwrap();
+
+        let mut app = App::new(None).unwrap();
+        app.current_dir = root.clone();
+        app.zoxide_initial_visible = false;
+        app.refresh_items();
+        app.list_state.select(Some(1));
+
+        app.list_nav_up();
+        assert_eq!(app.list_state.selected(), Some(0));
+
+        app.list_nav_down();
+        assert_eq!(app.list_state.selected(), Some(1));
+
+        app.list_nav_down(); // already at last
+        assert_eq!(app.list_state.selected(), Some(1));
+
+        app.list_state.select(Some(0));
+        app.list_nav_up(); // already at first
+        assert_eq!(app.list_state.selected(), Some(0));
+        cleanup(&root);
     }
 }

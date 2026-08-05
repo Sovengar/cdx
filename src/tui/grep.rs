@@ -143,3 +143,134 @@ pub fn execute_search(
     let items = to_dir_entries(&results, root);
     (results, items)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_rg_json_valid_match() {
+        let json = r#"{"type":"match","data":{"path":{"text":"src/main.rs"},"line_number":42,"lines":{"text":"    fn main() {\n"}}}"#;
+        let results = parse_rg_json(json);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].file_path, "src/main.rs");
+        assert_eq!(results[0].line_number, 42);
+        assert!(results[0].match_text.contains("fn main()"));
+    }
+
+    #[test]
+    fn test_parse_rg_json_multiple_matches() {
+        let json = r#"{"type":"match","data":{"path":{"text":"a.rs"},"line_number":1,"lines":{"text":"line1"}}}
+{"type":"match","data":{"path":{"text":"b.rs"},"line_number":5,"lines":{"text":"line2"}}}"#;
+        let results = parse_rg_json(json);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_rg_json_ignores_non_match_lines() {
+        let json = r#"{"type":"begin","data":{"path":{"text":"a.rs"}}}
+{"type":"match","data":{"path":{"text":"a.rs"},"line_number":1,"lines":{"text":"found it"}}}
+{"type":"end","data":{"path":{"text":"a.rs"}}}"#;
+        let results = parse_rg_json(json);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].match_text, "found it");
+    }
+
+    #[test]
+    fn test_parse_rg_json_empty() {
+        assert!(parse_rg_json("").is_empty());
+    }
+
+    #[test]
+    fn test_parse_rg_json_invalid() {
+        assert!(parse_rg_json("not json at all").is_empty());
+    }
+
+    #[test]
+    fn test_parse_rg_vimgrep_valid() {
+        let vimgrep = "src/main.rs:42:10:    fn main() {";
+        let results = parse_rg_vimgrep(vimgrep);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].file_path, "src/main.rs");
+        assert_eq!(results[0].line_number, 42);
+    }
+
+    #[test]
+    fn test_parse_rg_vimgrep_multiple() {
+        let vimgrep = "a.rs:1:0:line1\nb.rs:5:0:line2";
+        let results = parse_rg_vimgrep(vimgrep);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_rg_vimgrep_empty() {
+        assert!(parse_rg_vimgrep("").is_empty());
+    }
+
+    #[test]
+    fn test_parse_rg_vimgrep_invalid_line() {
+        assert!(parse_rg_vimgrep("not-a-vimgrep-line").is_empty());
+    }
+
+    #[test]
+    fn test_to_dir_entries_relative_path() {
+        let root = Path::new("/home/user/project");
+        let matches = vec![
+            GrepMatch {
+                file_path: "src/main.rs".to_string(),
+                line_number: 10,
+                match_text: "fn main()".to_string(),
+            },
+        ];
+        let entries = to_dir_entries(&matches, root);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].display, "src/main.rs:10");
+        assert!(entries[0].full_path.to_string_lossy().contains("src/main.rs"));
+        assert!(!entries[0].is_dir);
+    }
+
+    #[test]
+    fn test_to_dir_entries_absolute_path() {
+        let root = Path::new("/home/user/project");
+        let matches = vec![
+            GrepMatch {
+                file_path: "/home/user/project/lib.rs".to_string(),
+                line_number: 5,
+                match_text: "code".to_string(),
+            },
+        ];
+        let entries = to_dir_entries(&matches, root);
+        assert_eq!(entries[0].display, "lib.rs:5");
+    }
+
+    #[test]
+    fn test_execute_search_real_file() {
+        config::init();
+        let root = std::env::temp_dir().join(format!("cdx-grep-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("test.txt"), "hello world\nfoo bar\nhello again\n").unwrap();
+
+        let (results, items) = execute_search("hello", &root, true, true);
+        assert_eq!(results.len(), 2, "should find 2 matches for 'hello'");
+        assert_eq!(items.len(), 2);
+        assert!(items[0].display.contains("test.txt:"));
+        assert!(!items[0].is_dir);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_execute_search_no_matches() {
+        config::init();
+        let root = std::env::temp_dir().join(format!("cdx-grep-nomatch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("test.txt"), "hello world\n").unwrap();
+
+        let (results, _) = execute_search("NONEXISTENT_STRING_XYZ", &root, true, true);
+        assert!(results.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
