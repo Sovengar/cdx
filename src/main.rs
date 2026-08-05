@@ -46,7 +46,7 @@ fn main() -> anyhow::Result<()> {
 
 fn emit_result(path: Option<&Path>) {
     if let Some(p) = path {
-        let result_file = std::env::temp_dir().join("cdx-rs-result.txt");
+        let result_file = std::env::temp_dir().join("cdx-result.txt");
         let _ = std::fs::write(&result_file, format!("{}\n", p.display()));
         println!("{}", p.display());
     }

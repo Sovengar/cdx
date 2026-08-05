@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ignore::WalkBuilder;
 
@@ -32,13 +33,44 @@ pub fn list_dirs(
     show_dotfiles: bool,
     show_winhidden: bool,
 ) -> Vec<DirEntryItem> {
-    let mut builder = WalkBuilder::new(root);
-    builder.max_depth(Some(1));
-    builder.hidden(!show_dotfiles);
-    builder.require_git(false);
-    builder.filter_entry(move |entry| entry_filter(entry, show_dotfiles, show_winhidden));
+    let mut entries: Vec<DirEntryItem> = Vec::new();
+    let Ok(dir_entries) = std::fs::read_dir(root) else {
+        return entries;
+    };
 
-    collect_entries(&mut builder, root)
+    for entry in dir_entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !show_dotfiles && name.starts_with('.') {
+            continue;
+        }
+        if config::get().exclude_dirs.contains(&name.as_str()) {
+            continue;
+        }
+        if !show_winhidden && config::get().exclude_win_dirs.contains(&name.as_str()) {
+            continue;
+        }
+        if !entry.file_type().map_or(false, |ft| ft.is_dir()) {
+            continue;
+        }
+        let full_path = entry.path();
+        let full_str = full_path.to_string_lossy().replace('\\', "/");
+        let root_str = root.to_string_lossy().replace('\\', "/");
+        let rel = full_str
+            .strip_prefix(&root_str)
+            .unwrap_or(&full_str)
+            .trim_start_matches('/')
+            .to_string();
+        entries.push(DirEntryItem {
+            display: rel.clone(),
+            rel_path: rel,
+            full_path,
+            is_zoxide: false,
+            is_dir: true,
+        });
+    }
+
+    entries.sort_by(|a, b| a.display.cmp(&b.display));
+    entries
 }
 
 pub fn list_files(
@@ -47,7 +79,7 @@ pub fn list_files(
     show_winhidden: bool,
 ) -> Vec<DirEntryItem> {
     let mut builder = WalkBuilder::new(root);
-    builder.max_depth(Some(1));
+    builder.max_depth(Some(config::get().max_secondary_depth));
     builder.hidden(!show_dotfiles);
     builder.require_git(false);
     builder.filter_entry(move |entry| {
@@ -84,6 +116,7 @@ pub fn recursive_dir_search(
     root: &Path,
     show_dotfiles: bool,
     show_winhidden: bool,
+    cancel: &AtomicBool,
 ) -> Vec<DirEntryItem> {
     let mut builder = WalkBuilder::new(root);
     builder.max_depth(Some(config::get().max_secondary_depth));
@@ -91,14 +124,21 @@ pub fn recursive_dir_search(
     builder.require_git(false);
     builder.filter_entry(move |entry| entry_filter(entry, show_dotfiles, show_winhidden));
 
-    collect_entries(&mut builder, root)
+    collect_entries(&mut builder, root, Some(cancel))
 }
 
-fn collect_entries(builder: &mut WalkBuilder, root: &Path) -> Vec<DirEntryItem> {
+fn collect_entries(
+    builder: &mut WalkBuilder,
+    root: &Path,
+    cancel: Option<&AtomicBool>,
+) -> Vec<DirEntryItem> {
     let mut entries: Vec<DirEntryItem> = Vec::new();
     let root_str = root.to_string_lossy().replace('\\', "/");
 
     for result in builder.build() {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            break;
+        }
         if let Ok(entry) = result {
             if entry.path() == root {
                 continue;
@@ -120,4 +160,26 @@ fn collect_entries(builder: &mut WalkBuilder, root: &Path) -> Vec<DirEntryItem> 
     }
 
     entries
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn list_dirs_does_not_apply_global_ignore_rules() {
+        config::init();
+        let root = std::env::temp_dir().join(format!("cdx-walker-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Dropbox")).unwrap();
+        fs::create_dir_all(root.join(".local")).unwrap();
+        fs::write(root.join(".ignore"), "Dropbox/\n.local/\n").unwrap();
+
+        let entries = list_dirs(&root, false, false);
+
+        assert!(entries.iter().any(|entry| entry.display == "Dropbox"));
+        assert!(!entries.iter().any(|entry| entry.display == ".local"));
+        fs::remove_dir_all(root).unwrap();
+    }
 }

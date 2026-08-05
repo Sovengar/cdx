@@ -175,8 +175,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "cdx-rs"
-version = "0.1.0"
+name = "cdx"
+version = "1.0.0"
 dependencies = [
  "ansi-to-tui",
  "anyhow",

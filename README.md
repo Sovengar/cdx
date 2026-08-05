@@ -7,7 +7,7 @@ Jump between directories faster than `cd`. Think `zoxide` meets `fzf` in a TUI.
 ## Features
 
 - **TUI browser** — Fuzzy-filter directories and files, preview contents inline
-- **Three modes**: **Find** (dirs only), **Search** (files + dirs), **Grep** (full-text via ripgrep)
+- **Three modes**: **Directories** (dirs only), **Files** (files + dirs), **Content** (full-text via ripgrep)
 - **Zoxide integration** — Frequently-used paths show first with ★
 - **Tree preview** — Navigate directory trees from the preview panel
 - **Git awareness** — Shows branch, dirty/clean status, git status in preview
@@ -89,7 +89,7 @@ Set-PSReadLineKeyHandler -Key Ctrl+Shift+G -ScriptBlock {
 | `Enter` | cd into directory |
 | `Esc` / `Esc²` | Go to parent / Go to HOME |
 | `↑` / `↓` | Navigate list |
-| `Tab` | Cycle mode: Find → Search → Grep |
+| `Tab` | Change search mode: Directories → Files → Content |
 | `Ctrl+Enter` | Open in yazi/explorer |
 | `Ctrl+A` | Toggle dotfiles |
 | `Ctrl+W` | Toggle WinHidden files |

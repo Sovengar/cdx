@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
@@ -10,6 +12,12 @@ use crate::config;
 use crate::preview::PreviewEntry;
 use crate::walker::DirEntryItem;
 use crate::zoxide;
+
+struct SearchResult {
+    generation: u64,
+    root: PathBuf,
+    entries: Vec<DirEntryItem>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
@@ -24,11 +32,16 @@ pub enum Focus {
     Preview,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Popup {
+    ToolSelector,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum ExitAction {
     OutputPath(PathBuf),
-    SpawnYazi(PathBuf),
+    SpawnTool { command: String, path: PathBuf },
     JustExit,
 }
 
@@ -47,6 +60,8 @@ pub struct App {
 
     pub mode: Mode,
     pub focus: Focus,
+    pub popup: Option<Popup>,
+    pub popup_index: usize,
     pub show_dotfiles: bool,
     pub show_winhidden: bool,
 
@@ -61,6 +76,7 @@ pub struct App {
     pub exit_action: ExitAction,
 
     pub zoxide_cache: Vec<PathBuf>,
+    zoxide_initial_visible: bool,
     pub preview_text: Text<'static>,
     pub preview_contents: Text<'static>,
     pub preview_dirty: bool,
@@ -76,14 +92,19 @@ pub struct App {
     pub grep_search_root: PathBuf,
     pub grep_debounce_ms: u64,
 
-    pub find_pending: bool,
     pub find_debounce_ms: u64,
     pub find_cache: Vec<DirEntryItem>,
     pub find_cache_root: PathBuf,
+    pub find_cache_loaded: bool,
+    pub find_deadline: Option<Instant>,
+    pub search_generation: u64,
+    pub search_cancel: Option<Arc<AtomicBool>>,
+    search_results_tx: mpsc::Sender<SearchResult>,
+    search_results: mpsc::Receiver<SearchResult>,
 
     pub tick: u64,
     pub last_esc_time: Option<Instant>,
-    pub edit_pending: bool,
+    pub spawn_pending: Option<(String, PathBuf)>,
 }
 
 impl App {
@@ -94,6 +115,14 @@ impl App {
 
         let query = initial_query.unwrap_or_default();
         let cursor_pos = query.len();
+        let zoxide_initial_visible = query.is_empty();
+
+        let (search_tx, search_results) = mpsc::channel();
+        let find_deadline = if query.is_empty() {
+            None
+        } else {
+            Some(Instant::now() + Duration::from_millis(cfg.find_debounce_ms))
+        };
 
         Ok(Self {
             current_dir,
@@ -102,6 +131,8 @@ impl App {
 
             mode: Mode::Find,
             focus: Focus::List,
+            popup: None,
+            popup_index: 0,
             show_dotfiles: cfg.show_dotfiles,
             show_winhidden: cfg.show_winhidden,
 
@@ -116,6 +147,7 @@ impl App {
             exit_action: ExitAction::JustExit,
 
             zoxide_cache,
+            zoxide_initial_visible,
             preview_text: Text::default(),
             preview_contents: Text::default(),
             preview_dirty: false,
@@ -131,14 +163,19 @@ impl App {
             grep_search_root: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
             grep_debounce_ms: cfg.grep_debounce_ms,
 
-            find_pending: false,
             find_debounce_ms: cfg.find_debounce_ms,
             find_cache: Vec::new(),
             find_cache_root: PathBuf::new(),
+            find_cache_loaded: false,
+            find_deadline,
+            search_generation: 0,
+            search_cancel: None,
+            search_results_tx: search_tx,
+            search_results,
 
             tick: 0,
             last_esc_time: None,
-            edit_pending: false,
+            spawn_pending: None,
         })
     }
 
@@ -169,7 +206,12 @@ impl App {
             self.show_dotfiles,
             self.show_winhidden,
         );
-        self.items = self.merge_zoxide(walker_items);
+        self.items = if self.zoxide_initial_visible {
+            self.zoxide_initial_visible = false;
+            self.merge_zoxide(walker_items)
+        } else {
+            walker_items
+        };
         self.filtered_indices = (0..self.items.len()).collect();
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
@@ -178,19 +220,29 @@ impl App {
     }
 
     fn invalidate_find_cache(&mut self) {
+        self.search_generation = self.search_generation.wrapping_add(1);
+        self.cancel_search();
         self.find_cache.clear();
         self.find_cache_root.clear();
+        self.find_cache_loaded = false;
+        self.find_deadline = None;
     }
 
     pub fn apply_query(&mut self) {
         if self.mode == Mode::Grep {
+            self.cancel_search();
+            self.find_deadline = None;
             if !self.query.is_empty() {
                 self.grep_pending = true;
             }
             return;
         }
 
+        self.search_generation = self.search_generation.wrapping_add(1);
+
         if self.query.is_empty() {
+            self.cancel_search();
+            self.find_deadline = None;
             if self.mode == Mode::Find {
                 self.load_find_items();
             } else {
@@ -202,60 +254,30 @@ impl App {
             return;
         }
 
-        self.find_pending = true;
+        self.cancel_search();
+        self.find_deadline = Some(
+            Instant::now() + Duration::from_millis(self.find_debounce_ms),
+        );
     }
 
-    pub fn run_find_search(&mut self) {
-        self.find_pending = false;
+    pub fn start_find_search(&mut self) {
+        let Some(deadline) = self.find_deadline else {
+            return;
+        };
+        if Instant::now() < deadline {
+            return;
+        }
+        self.find_deadline = None;
 
         if self.query.is_empty() {
-            if self.mode == Mode::Find {
-                self.load_find_items();
-            } else {
-                self.filtered_indices = (0..self.items.len()).collect();
-            }
-            if !self.filtered_indices.is_empty() {
-                self.list_state.select(Some(0));
-            }
             return;
         }
 
         if self.mode == Mode::Find {
-            if self.find_cache_root != self.current_dir || self.find_cache.is_empty() {
-                self.find_cache = crate::walker::recursive_dir_search(
-                    &self.current_dir,
-                    self.show_dotfiles,
-                    self.show_winhidden,
-                );
-                self.find_cache_root = self.current_dir.clone();
-            }
-
-            let pattern = Pattern::parse(
-                &self.query,
-                CaseMatching::Ignore,
-                Normalization::Smart,
-            );
-
-            let mut scored: Vec<(usize, u32)> = self
-                .find_cache
-                .iter()
-                .enumerate()
-                .filter_map(|(i, item)| {
-                    self.scratch.clear();
-                    let haystack = Utf32Str::new(item.display.as_str(), &mut self.scratch);
-                    pattern.score(haystack, &mut self.matcher).map(|s| (i, s))
-                })
-                .collect();
-
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
-            scored.truncate(200);
-
-            let top_indices: Vec<usize> = scored.into_iter().map(|(i, _)| i).collect();
-            self.items = top_indices.iter().map(|&i| self.find_cache[i].clone()).collect();
-            self.filtered_indices = (0..self.items.len()).collect();
-
-            if !self.filtered_indices.is_empty() {
-                self.list_state.select(Some(0));
+            if self.find_cache_root != self.current_dir || !self.find_cache_loaded {
+                self.spawn_directory_search();
+            } else {
+                self.filter_find_cache();
             }
             return;
         }
@@ -286,12 +308,127 @@ impl App {
         }
     }
 
+    fn spawn_directory_search(&mut self) {
+        let root = self.current_dir.clone();
+        let show_dotfiles = self.show_dotfiles;
+        let show_winhidden = self.show_winhidden;
+        let generation = self.search_generation;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let sender = self.search_results_tx.clone();
+
+        self.search_cancel = Some(cancel);
+        std::thread::spawn(move || {
+            let entries = crate::walker::recursive_dir_search(
+                &root,
+                show_dotfiles,
+                show_winhidden,
+                &worker_cancel,
+            );
+            if !worker_cancel.load(Ordering::Relaxed) {
+                let _ = sender.send(SearchResult {
+                    generation,
+                    root,
+                    entries,
+                });
+            }
+        });
+    }
+
+    fn filter_find_cache(&mut self) {
+        let pattern = Pattern::parse(
+            &self.query,
+            CaseMatching::Ignore,
+            Normalization::Smart,
+        );
+
+        let mut scored: Vec<(usize, u32)> = self
+            .find_cache
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| {
+                self.scratch.clear();
+                let haystack = Utf32Str::new(item.display.as_str(), &mut self.scratch);
+                pattern.score(haystack, &mut self.matcher).map(|s| (i, s))
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        scored.truncate(200);
+
+        let top_indices: Vec<usize> = scored.into_iter().map(|(i, _)| i).collect();
+        self.items = top_indices
+            .iter()
+            .map(|&i| self.find_cache[i].clone())
+            .collect();
+        self.filtered_indices = (0..self.items.len()).collect();
+
+        if !self.filtered_indices.is_empty() {
+            self.list_state.select(Some(0));
+        }
+    }
+
+    pub fn receive_search_results(&mut self) {
+        while let Ok(result) = self.search_results.try_recv() {
+            if self.mode != Mode::Find
+                || self.query.is_empty()
+                || result.generation != self.search_generation
+                || result.root != self.current_dir
+            {
+                continue;
+            }
+
+            self.find_cache = result.entries;
+            self.find_cache_root = result.root;
+            self.find_cache_loaded = true;
+            self.search_cancel = None;
+            self.filter_find_cache();
+        }
+    }
+
+    pub fn cancel_search(&mut self) {
+        if let Some(cancel) = self.search_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub fn search_poll_timeout(&self) -> Duration {
+        let base = Duration::from_millis(50);
+        self.find_deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()).min(base))
+            .unwrap_or(base)
+    }
+
+    pub fn search_due(&self) -> bool {
+        self.find_deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
     fn reset_preview(&mut self) {
         self.preview_text = Text::default();
         self.preview_contents = Text::default();
         self.preview_entries.clear();
         self.preview_selection = 0;
         self.preview_scroll = 0;
+    }
+
+    fn navigate_to(&mut self, directory: PathBuf) {
+        self.current_dir = directory;
+        if self.mode == Mode::Grep {
+            self.grep_search_root = self.current_dir.clone();
+        }
+
+        self.reset_preview();
+        self.invalidate_find_cache();
+        self.items.clear();
+        self.filtered_indices.clear();
+        self.list_state.select(None);
+        self.grep_results.clear();
+        self.grep_pending = false;
+
+        self.refresh_items();
+        self.apply_query();
+        self.preview_dirty = true;
     }
 
     pub fn handle_enter(&mut self) {
@@ -318,7 +455,18 @@ impl App {
                 }
             }
             Mode::Search => {
-                // Preview panel shows file content; Enter is a no-op for now
+                if let Some(parent) = item.full_path.parent() {
+                    if parent.exists() {
+                        self.current_dir = parent.to_path_buf();
+                        self.query.clear();
+                        self.cursor_pos = 0;
+                        self.reset_preview();
+                        self.mode = Mode::Find;
+                        self.invalidate_find_cache();
+                        self.refresh_items();
+                        self.preview_dirty = true;
+                    }
+                }
             }
             Mode::Grep => {
                 if let Some(parent) = item.full_path.parent() {
@@ -342,13 +490,7 @@ impl App {
             if last.elapsed() < Duration::from_millis(300) {
                 self.last_esc_time = None;
                 if let Some(home) = dirs::home_dir() {
-                    self.current_dir = home;
-                    self.query.clear();
-                    self.cursor_pos = 0;
-                    self.reset_preview();
-                    self.invalidate_find_cache();
-                    self.refresh_items();
-                    self.preview_dirty = true;
+                    self.navigate_to(home);
                 }
                 return;
             }
@@ -360,12 +502,7 @@ impl App {
             } else {
                 let parent = parent.to_path_buf();
                 if parent.exists() {
-                    self.current_dir = parent;
-                    self.reset_preview();
-                    self.invalidate_find_cache();
-                    self.refresh_items();
-                    self.preview_dirty = true;
-                    self.apply_query();
+                    self.navigate_to(parent);
                 }
             }
         } else {
@@ -374,6 +511,11 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
+        if self.popup.is_some() {
+            self.handle_popup_key(key);
+            return;
+        }
+
         if self.handle_config_key(&key) {
             return;
         }
@@ -410,6 +552,60 @@ impl App {
             self.preview_dirty = true;
         }
     }
+
+    fn handle_popup_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        match self.popup {
+            Some(Popup::ToolSelector) => {
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if self.popup_index > 0 {
+                            self.popup_index -= 1;
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        let tool_count = crate::config::get().tool_selector.len();
+                        if tool_count > 0 && self.popup_index < tool_count - 1 {
+                            self.popup_index += 1;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        self.execute_tool_from_popup();
+                    }
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        self.popup = None;
+                    }
+                    _ => {}
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn execute_tool_from_popup(&mut self) {
+        let dir = self.get_selected_dir();
+        let tools = &crate::config::get().tool_selector;
+        let tool = match tools.get(self.popup_index) {
+            Some(t) => t,
+            None => return,
+        };
+        self.popup = None;
+        if let Some(path) = dir {
+            self.spawn_pending = Some((tool.command.clone(), path));
+        }
+    }
+
+    fn get_selected_dir(&self) -> Option<PathBuf> {
+        let idx = self.list_state.selected()?;
+        let item_idx = self.filtered_indices.get(idx)?;
+        let item = self.items.get(*item_idx)?;
+        if item.is_dir {
+            Some(item.full_path.clone())
+        } else {
+            None
+        }
+    }
     fn handle_preview_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -429,8 +625,8 @@ impl App {
                     if let Some(&item_idx) = self.filtered_indices.get(idx) {
                         if let Some(item) = self.items.get(item_idx) {
                             if item.is_dir {
-                                self.exit_action = ExitAction::SpawnYazi(item.full_path.clone());
-                                self.should_quit = true;
+                                self.popup = Some(Popup::ToolSelector);
+                                self.popup_index = 0;
                             }
                         }
                     }
@@ -535,15 +731,23 @@ impl App {
                 self.apply_query();
                 true
             }
-            Some("open_settings") => { self.edit_pending = true; true }
+            Some("open_settings") => {
+                let cfg_path = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".config")
+                    .join("cdx")
+                    .join("config.toml");
+                self.spawn_pending = Some(("nvim".to_string(), cfg_path));
+                true
+            }
             Some("switch_mode") => { self.switch_mode(); true }
             Some("open_explorer") => {
                 if let Some(idx) = self.list_state.selected() {
                     if let Some(&item_idx) = self.filtered_indices.get(idx) {
                         if let Some(item) = self.items.get(item_idx) {
                             if item.is_dir {
-                                self.exit_action = ExitAction::SpawnYazi(item.full_path.clone());
-                                self.should_quit = true;
+                                self.popup = Some(Popup::ToolSelector);
+                                self.popup_index = 0;
                             }
                         }
                     }
@@ -567,6 +771,9 @@ impl App {
     }
 
     pub fn switch_mode(&mut self) {
+        self.search_generation = self.search_generation.wrapping_add(1);
+        self.cancel_search();
+        self.find_deadline = None;
         self.mode = match self.mode {
             Mode::Find => Mode::Search,
             Mode::Search => Mode::Grep,
@@ -576,7 +783,7 @@ impl App {
         if self.mode == Mode::Grep {
             let was_hidden = self.show_winhidden;
             self.show_winhidden = false;
-            self.grep_search_root = self.clamp_search_root();
+            self.grep_search_root = self.current_dir.clone();
 
             if was_hidden {
                 eprintln!("[cdx] Grep mode: WinHidden auto-disabled (Ctrl+W to re-enable)");
@@ -589,6 +796,7 @@ impl App {
 
         self.refresh_items();
         self.apply_query();
+        self.preview_dirty = true;
     }
 
     pub fn toggle_winhidden(&mut self) {
@@ -597,15 +805,6 @@ impl App {
             self.grep_pending = true;
         }
         self.refresh_items();
-    }
-
-    fn clamp_search_root(&self) -> PathBuf {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-        if self.current_dir.starts_with(&home) {
-            self.current_dir.clone()
-        } else {
-            home
-        }
     }
 
     pub fn run_grep_search(&mut self) {
@@ -668,12 +867,24 @@ impl App {
         self.items = self
             .grep_results
             .iter()
-            .map(|m| DirEntryItem {
-                display: format!("{}:{}", m.file_path, m.line_number),
-                rel_path: m.file_path.clone(),
-                full_path: root.join(&m.file_path),
-                is_zoxide: false,
-                is_dir: false,
+            .map(|m| {
+                let full_path = if std::path::Path::new(&m.file_path).is_absolute() {
+                    std::path::PathBuf::from(&m.file_path)
+                } else {
+                    root.join(&m.file_path)
+                };
+                let display_path = if let Ok(rel) = std::path::Path::new(&m.file_path).strip_prefix(&root) {
+                    rel.to_string_lossy().replace('\\', "/")
+                } else {
+                    m.file_path.clone()
+                };
+                DirEntryItem {
+                    display: format!("{}:{}", display_path, m.line_number),
+                    rel_path: full_path.to_string_lossy().replace('\\', "/"),
+                    full_path,
+                    is_zoxide: false,
+                    is_dir: false,
+                }
             })
             .collect();
 

@@ -33,8 +33,27 @@ exclude_path_globs = ["**/go/pkg/mod"]
 
 [keys]
 quit = "ctrl+c"
-toggle_dotfiles = "ctrl+a"
+toggle_dotfiles = "ctrl+h"
 toggle_winhidden = "ctrl+w"
 open_settings = "ctrl+e"
 switch_mode = "tab"
-open_explorer = "ctrl+enter"
+open_explorer = "ctrl+o"
+
+# Tool selector (Ctrl+Enter on a directory)
+# Each entry needs a display name and the command to run.
+# Order in this list = order in the popup.
+[[tool_selector]]
+name = "yazi"
+command = "yazi"
+
+[[tool_selector]]
+name = "nvim"
+command = "nvim"
+
+[[tool_selector]]
+name = "opencode"
+command = "opencode"
+
+[[tool_selector]]
+name = "lazygit"
+command = "lazygit"

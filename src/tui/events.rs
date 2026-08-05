@@ -17,14 +17,13 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
     app.refresh_items();
 
     while !app.should_quit {
+        app.receive_search_results();
         terminal.draw(|f| super::ui::render(f, &mut app))?;
 
         let timeout = if app.mode == Mode::Grep && app.grep_pending {
             Duration::from_millis(app.grep_debounce_ms)
-        } else if app.find_pending {
-            Duration::from_millis(app.find_debounce_ms)
         } else {
-            Duration::from_millis(50)
+            app.search_poll_timeout()
         };
 
         if event::poll(timeout)? {
@@ -52,8 +51,8 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
             }
         } else if app.grep_pending && app.mode == Mode::Grep {
             app.run_grep_search();
-        } else if app.find_pending {
-            app.run_find_search();
+        } else if app.search_due() {
+            app.start_find_search();
         }
 
         if app.preview_dirty {
@@ -77,35 +76,27 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
             app.preview_dirty = false;
         }
 
-        if app.edit_pending {
-            app.edit_pending = false;
-            app.should_quit = true;
+        // Handle inline tool spawning
+        if let Some((ref command, ref path)) = app.spawn_pending {
+            let command = command.clone();
+            let path = path.clone();
+            app.spawn_pending = None;
+
+            execute!(stdout(), crossterm::event::DisableMouseCapture)?;
+            ratatui::restore();
+
+            let _ = std::process::Command::new(&command)
+                .arg(&path)
+                .status();
+
+            terminal = ratatui::init();
+            execute!(stdout(), crossterm::event::EnableMouseCapture)?;
+            app.preview_dirty = true;
         }
     }
 
     execute!(stdout(), crossterm::event::DisableMouseCapture)?;
     ratatui::restore();
-
-    if app.edit_pending {
-        let cfg_path = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".config")
-            .join("cdx")
-            .join("config.toml");
-        eprintln!("[cdx] opening {} ...", cfg_path.display());
-        #[cfg(windows)]
-        { std::process::Command::new("cmd").args(["/c", "start", "", &cfg_path.to_string_lossy()]).spawn().ok(); }
-        #[cfg(not(windows))]
-        { std::process::Command::new("xdg-open").arg(&cfg_path).spawn().ok(); }
-        return run(initial_query);
-    }
-
-    if let ExitAction::SpawnYazi(path) = &app.exit_action {
-        std::process::Command::new("yazi")
-            .arg(path)
-            .status()?;
-        return Ok(Some(app.current_dir));
-    }
 
     if let ExitAction::OutputPath(path) = &app.exit_action {
         return Ok(Some(path.clone()));

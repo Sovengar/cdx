@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use super::app::{App, Focus, Mode};
+use super::app::{App, Focus, Mode, Popup};
 use crate::walker::DirEntryItem;
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -54,6 +54,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_list(frame, main[0], app);
     render_preview(frame, main[1], app);
     render_header(frame, outer[3], app);
+
+    if let Some(Popup::ToolSelector) = app.popup {
+        render_tool_selector(frame, term, app);
+    }
 }
 
 fn should_use_popup(term: Rect) -> bool {
@@ -131,11 +135,16 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
     } else {
         header_fg()
     };
+    let list_title = match app.mode {
+        Mode::Find => " Dirs ",
+        Mode::Search => " Files ",
+        Mode::Grep => " Content ",
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Thick)
         .border_style(Style::default().fg(focus_fg).add_modifier(Modifier::BOLD))
-        .title(" Files ")
+        .title(list_title)
         .title(
             Line::from(Span::styled(
                 format!(" {}/{} ", app.filtered_indices.len(), app.items.len()),
@@ -203,20 +212,26 @@ fn render_list(frame: &mut Frame, area: Rect, app: &mut App) {
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn render_header(frame: &mut Frame, area: Rect, app: &mut App) {
-    let labels = match app.mode {
+    let mut labels: Vec<String> = match app.mode {
         Mode::Find => vec![
-            "Enter (cd) | Esc (..) | Esc² (~) | Tab (Search) | Ctrl+Enter (explorer)",
-            "Ctrl+A (.) | Ctrl+W (h) | Ctrl+E (settings) | Ctrl+C (quit)",
+            "Enter (cd) | Esc (..) | Esc² (~) | Tab (mode) | Ctrl+O (explorer)".into(),
+            "Ctrl+H (dotfiles) | Ctrl+E (settings) | Ctrl+C (quit)".into(),
         ],
         Mode::Search => vec![
-            "Enter (open) | Esc (..) | Esc² (~) | Tab (Grep)",
-            "Ctrl+A (.) | Ctrl+W (h) | Ctrl+E (settings) | Ctrl+C (quit)",
+            "Enter (open) | Esc (..) | Esc² (~) | Tab (mode)".into(),
+            "Ctrl+H (dotfiles) | Ctrl+E (settings) | Ctrl+C (quit)".into(),
         ],
         Mode::Grep => vec![
-            "Enter (cd parent) | Esc (..) | Esc² (~) | Tab (Find)",
-            "Ctrl+A (.) | Ctrl+W (h) | Ctrl+E (settings) | Ctrl+C (quit)",
+            "Enter (cd parent) | Esc (..) | Esc² (~) | Tab (mode)".into(),
+            "Ctrl+H (dotfiles) | Ctrl+E (settings) | Ctrl+C (quit)".into(),
         ],
     };
+
+    if cfg!(target_os = "windows") {
+        for label in labels.iter_mut() {
+            *label = format!("{} | Ctrl+W (WinHidden)", label);
+        }
+    }
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -249,21 +264,24 @@ fn render_status(frame: &mut Frame, area: Rect, app: &mut App) {
         _ => display_path(&app.current_dir),
     };
     let mode = match app.mode {
-        Mode::Find => "Find",
-        Mode::Search => "Search",
-        Mode::Grep => "Grep",
+        Mode::Find => "Dirs",
+        Mode::Search => "Files",
+        Mode::Grep => "Content",
     };
     let dot = if app.show_dotfiles { "✓" } else { "✗" };
-    let win = if app.show_winhidden { "✓" } else { "✗" };
 
-    let spinner = if app.find_pending || app.grep_pending {
+    let spinner = if app.find_deadline.is_some()
+        || app.search_cancel.is_some()
+        || app.grep_pending
+    {
         let idx = (app.tick as usize / 3) % SPINNER.len();
         SPINNER[idx]
     } else {
         ""
     };
 
-    let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(38)])
+    let status_width: u16 = if cfg!(target_os = "windows") { 38 } else { 28 };
+    let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(status_width)])
         .split(area);
 
     let path_block = Block::default()
@@ -293,9 +311,15 @@ fn render_status(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let status_inner = status_block.inner(cols[1]);
     frame.render_widget(status_block, cols[1]);
+    let status_text = if cfg!(target_os = "windows") {
+        let win = if app.show_winhidden { "✓" } else { "✗" };
+        format!(" {} | dotfiles: {} | WinHidden: {}", mode, dot, win)
+    } else {
+        format!(" {} | dotfiles: {}", mode, dot)
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            format!(" {} | dotfiles: {} | WinHidden: {}", mode, dot, win),
+            status_text,
             Style::default().fg(header_fg()),
         )])),
         status_inner,
@@ -469,4 +493,41 @@ fn display_path(path: &std::path::Path) -> String {
         }
     }
     s
+}
+
+fn render_tool_selector(frame: &mut Frame, area: Rect, app: &App) {
+    let tools = &crate::config::get().tool_selector;
+    if tools.is_empty() {
+        return;
+    }
+
+    let w = 28u16;
+    let h = (tools.len() as u16) + 4;
+    let x = (area.width - w) / 2;
+    let y = (area.height - h) / 2;
+    let popup = Rect::new(x, y, w, h);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .title(Line::from(Span::styled(" Open with ", Style::default().add_modifier(Modifier::BOLD))))
+        .title_alignment(Alignment::Center);
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let items: Vec<ListItem> = tools.iter().enumerate().map(|(i, tool)| {
+        let style = if i == app.popup_index {
+            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        ListItem::new(format!("  {}", tool.name)).style(style)
+    }).collect();
+
+    let list = List::new(items);
+    frame.render_widget(list, inner);
 }

@@ -5,6 +5,21 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct ToolEntry {
+    pub name: String,
+    pub command: String,
+}
+
+fn default_tool_selector() -> Vec<ToolEntry> {
+    vec![
+        ToolEntry { name: "yazi".into(), command: "yazi".into() },
+        ToolEntry { name: "nvim".into(), command: "nvim".into() },
+        ToolEntry { name: "opencode".into(), command: "opencode".into() },
+        ToolEntry { name: "lazygit".into(), command: "lazygit".into() },
+    ]
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ConfigRaw {
     #[serde(default)]
@@ -37,6 +52,8 @@ struct ConfigRaw {
     exclude_path_globs: Vec<String>,
     #[serde(default)]
     keys: KeybindingsRaw,
+    #[serde(default = "default_tool_selector")]
+    tool_selector: Vec<ToolEntry>,
 }
 
 fn default_80() -> u16 { 80 }
@@ -74,11 +91,11 @@ struct KeybindingsRaw {
 }
 
 fn default_k_quit() -> String { "ctrl+c".into() }
-fn default_k_toggle_dotfiles() -> String { "ctrl+a".into() }
+fn default_k_toggle_dotfiles() -> String { "ctrl+h".into() }
 fn default_k_toggle_winhidden() -> String { "ctrl+w".into() }
 fn default_k_open_settings() -> String { "ctrl+e".into() }
 fn default_k_switch_mode() -> String { "tab".into() }
-fn default_k_open_explorer() -> String { "ctrl+enter".into() }
+fn default_k_open_explorer() -> String { "ctrl+o".into() }
 fn default_k_go_home() -> String { "".into() }
 
 impl Default for KeybindingsRaw {
@@ -189,6 +206,7 @@ pub struct Config {
     pub exclude_win_dirs: Vec<&'static str>,
     pub exclude_path_globs: Vec<&'static str>,
     pub keys: Keybindings,
+    pub tool_selector: Vec<ToolEntry>,
 }
 
 impl From<ConfigRaw> for Config {
@@ -217,6 +235,7 @@ impl From<ConfigRaw> for Config {
                 open_explorer: parse_key(&r.keys.open_explorer),
                 go_home: parse_key(&r.keys.go_home),
             },
+            tool_selector: r.tool_selector,
         }
     }
 }
@@ -270,6 +289,7 @@ impl Default for ConfigRaw {
             exclude_win_dirs: default_exclude_win_dirs(),
             exclude_path_globs: default_exclude_path_globs(),
             keys: KeybindingsRaw::default(),
+            tool_selector: default_tool_selector(),
         }
     }
 }
