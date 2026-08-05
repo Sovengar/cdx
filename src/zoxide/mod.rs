@@ -1,3 +1,5 @@
+pub mod merge;
+
 use std::path::PathBuf;
 
 pub fn query(query_str: &str) -> Option<PathBuf> {

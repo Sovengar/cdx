@@ -202,7 +202,12 @@ impl App {
         );
         self.items = if self.zoxide_initial_visible {
             self.zoxide_initial_visible = false;
-            self.merge_zoxide(walker_items)
+            zoxide::merge::merge_with_dirs(
+                &self.zoxide_cache,
+                walker_items,
+                &self.current_dir,
+                config::get().zoxide_limit,
+            )
         } else {
             walker_items
         };
@@ -432,7 +437,7 @@ impl App {
             None => return,
         };
         let item = match self.items.get(idx) {
-            Some(item) => item,
+            Some(item) => item.clone(),
             None => return,
         };
 
@@ -448,33 +453,23 @@ impl App {
                     self.preview_dirty = true;
                 }
             }
-            Mode::Search => {
-                if let Some(parent) = item.full_path.parent() {
-                    if parent.exists() {
-                        self.current_dir = parent.to_path_buf();
-                        self.query.clear();
-                        self.cursor_pos = 0;
-                        self.reset_preview();
-                        self.mode = Mode::Find;
-                        self.invalidate_find_cache();
-                        self.refresh_items();
-                        self.preview_dirty = true;
-                    }
-                }
+            Mode::Search | Mode::Grep => {
+                self.navigate_to_parent(&item);
             }
-            Mode::Grep => {
-                if let Some(parent) = item.full_path.parent() {
-                    if parent.exists() {
-                        self.current_dir = parent.to_path_buf();
-                        self.query.clear();
-                        self.cursor_pos = 0;
-                        self.reset_preview();
-                        self.mode = Mode::Find;
-                        self.invalidate_find_cache();
-                        self.refresh_items();
-                        self.preview_dirty = true;
-                    }
-                }
+        }
+    }
+
+    fn navigate_to_parent(&mut self, item: &DirEntryItem) {
+        if let Some(parent) = item.full_path.parent() {
+            if parent.exists() {
+                self.current_dir = parent.to_path_buf();
+                self.query.clear();
+                self.cursor_pos = 0;
+                self.reset_preview();
+                self.mode = Mode::Find;
+                self.invalidate_find_cache();
+                self.refresh_items();
+                self.preview_dirty = true;
             }
         }
     }
@@ -736,15 +731,9 @@ impl App {
             }
             Some("switch_mode") => { self.switch_mode(); true }
             Some("open_explorer") => {
-                if let Some(idx) = self.list_state.selected() {
-                    if let Some(&item_idx) = self.filtered_indices.get(idx) {
-                        if let Some(item) = self.items.get(item_idx) {
-                            if item.is_dir {
-                                self.popup = Some(Popup::ToolSelector);
-                                self.popup_index = 0;
-                            }
-                        }
-                    }
+                if self.get_selected_dir().is_some() {
+                    self.popup = Some(Popup::ToolSelector);
+                    self.popup_index = 0;
                 }
                 true
             }
@@ -856,53 +845,5 @@ impl App {
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
         }
-    }
-
-    fn merge_zoxide(&mut self, mut walker_items: Vec<DirEntryItem>) -> Vec<DirEntryItem> {
-        let home = dirs::home_dir();
-        let home_str = home.as_ref().map(|h| h.to_string_lossy().replace('\\', "/"));
-        let home_lower = home_str.as_ref().map(|s| s.to_lowercase());
-        let mut zoxide_items: Vec<DirEntryItem> = Vec::new();
-        let limit = config::get().zoxide_limit;
-
-        for zpath in &self.zoxide_cache {
-            let full_str = zpath.to_string_lossy().replace('\\', "/");
-            if let Some(ref hl) = home_lower {
-                if !full_str.to_lowercase().starts_with(hl) {
-                    continue;
-                }
-            }
-            let exists = walker_items.iter().any(|w| w.full_path == *zpath);
-            let is_current = *zpath == self.current_dir;
-            if exists || is_current {
-                continue;
-            }
-            let display = if let Some(ref hs) = home_str {
-                if full_str.starts_with(hs.as_str()) {
-                    format!("~{}", &full_str[hs.len()..])
-                } else {
-                    full_str.clone()
-                }
-            } else {
-                full_str.clone()
-            };
-            zoxide_items.push(DirEntryItem {
-                display,
-                rel_path: zpath.to_string_lossy().replace('\\', "/"),
-                full_path: zpath.clone(),
-                is_zoxide: true,
-                is_dir: true,
-            });
-            if zoxide_items.len() >= limit {
-                break;
-            }
-        }
-
-        walker_items.retain(|w| {
-            !zoxide_items.iter().any(|z| z.full_path == w.full_path)
-        });
-
-        zoxide_items.extend(walker_items);
-        zoxide_items
     }
 }

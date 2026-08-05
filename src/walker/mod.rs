@@ -14,15 +14,22 @@ pub struct DirEntryItem {
     pub is_dir: bool,
 }
 
-fn entry_filter(entry: &ignore::DirEntry, show_dotfiles: bool, show_winhidden: bool) -> bool {
-    let name = entry.file_name().to_string_lossy();
-    if config::get().exclude_dirs.contains(&name.as_ref()) {
-        return false;
+pub fn should_exclude(name: &str, show_dotfiles: bool, show_winhidden: bool) -> bool {
+    if config::get().exclude_dirs.contains(&name) {
+        return true;
     }
-    if !show_winhidden && config::get().exclude_win_dirs.contains(&name.as_ref()) {
-        return false;
+    if !show_winhidden && config::get().exclude_win_dirs.contains(&name) {
+        return true;
     }
     if !show_dotfiles && name.starts_with('.') {
+        return true;
+    }
+    false
+}
+
+fn entry_filter(entry: &ignore::DirEntry, show_dotfiles: bool, show_winhidden: bool) -> bool {
+    let name = entry.file_name().to_string_lossy();
+    if should_exclude(&name, show_dotfiles, show_winhidden) {
         return false;
     }
     entry.file_type().map_or(false, |ft| ft.is_dir())
@@ -40,13 +47,7 @@ pub fn list_dirs(
 
     for entry in dir_entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if !show_dotfiles && name.starts_with('.') {
-            continue;
-        }
-        if config::get().exclude_dirs.contains(&name.as_str()) {
-            continue;
-        }
-        if !show_winhidden && config::get().exclude_win_dirs.contains(&name.as_str()) {
+        if should_exclude(&name, show_dotfiles, show_winhidden) {
             continue;
         }
         if !entry.file_type().map_or(false, |ft| ft.is_dir()) {
@@ -84,16 +85,7 @@ pub fn list_files(
     builder.require_git(false);
     builder.filter_entry(move |entry| {
         let name = entry.file_name().to_string_lossy();
-        if config::get().exclude_dirs.contains(&name.as_ref()) {
-            return false;
-        }
-        if !show_winhidden && config::get().exclude_win_dirs.contains(&name.as_ref()) {
-            return false;
-        }
-        if !show_dotfiles && name.starts_with('.') {
-            return false;
-        }
-        true
+        !should_exclude(&name, show_dotfiles, show_winhidden)
     });
 
     builder
