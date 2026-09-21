@@ -186,6 +186,7 @@ dependencies = [
  "ignore",
  "nucleo-matcher",
  "ratatui",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

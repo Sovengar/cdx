@@ -209,9 +209,6 @@ impl App {
             } else {
                 self.filtered_indices = (0..self.items.len()).collect();
             }
-            if !self.filtered_indices.is_empty() {
-                self.list_state.select(Some(0));
-            }
             return;
         }
 
@@ -429,6 +426,7 @@ impl App {
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
         }
+        self.preview.dirty = true;
     }
 }
 

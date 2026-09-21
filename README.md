@@ -1,28 +1,23 @@
 # cdx — interactive directory navigator
 
-Jump between directories faster than `cd`. Think `zoxide` meets `fzf` in a TUI.
+Jump between directories faster than `cd`. Think `zoxide` meets `fzf` in a TUI but with steroids + superpowers + wisdom of _Platon_.
 
 ![screenshot](https://img.shields.io/badge/status-beta-blue)
 
 ## Features
 
-- **TUI browser** — Fuzzy-filter directories and files, preview contents inline
-- **Three modes**: **Directories** (dirs only), **Files** (files + dirs), **Content** (full-text via ripgrep)
-- **Zoxide integration** — Frequently-used paths show first with ★
-- **Tree preview** — Navigate directory trees from the preview panel
-- **Git awareness** — Shows branch, dirty/clean status, git status in preview
-- **Fully configurable** — `~/.config/cdx/config.toml`, including keybindings
-- **Explorer integration** — `Ctrl+Enter` to open selected dir in yazi (or your file manager)
-- **Cross-platform** — Windows (PowerShell) and Unix
+See [FEATURES.md](FEATURES.md) for the full list.
 
 ## Quick install
 
 **Windows (PowerShell):**
+
 ```powershell
 irm https://raw.githubusercontent.com/Sovengar/cdx/main/scripts/install.ps1 | iex
 ```
 
 **Linux / macOS:**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Sovengar/cdx/main/scripts/install.sh | bash
 ```
@@ -35,20 +30,26 @@ Requires Rust: https://rustup.rs
 git clone https://github.com/Sovengar/cdx.git
 cd cdx
 cargo build --release
-# Binary at target/release/cdx-rs
+# Binary at target/release/cdx
 ```
 
 On Windows, copy to `~/.local/bin/cdx.exe`:
+
 ```powershell
 Copy-Item target/release/cdx.exe ~/.local/bin/cdx.exe
 ```
 
 On Unix:
+
 ```bash
-cp target/release/cdx-rs ~/.local/bin/cdx
+cp target/release/cdx ~/.local/bin/cdx
 ```
 
 Make sure `~/.local/bin` is in your PATH.
+
+## Wrappers
+
+Wrapping the output of the TUI is mandatory to complete the navigation. It is done in the wrapper so you can also customize the end result, like for example using `eza` after navigation.
 
 ### PowerShell wrapper
 
@@ -72,29 +73,37 @@ Set-PSReadLineKeyHandler -Key Ctrl+Shift+G -ScriptBlock {
 }
 ```
 
+### Fish wrapper
+
+Add to `~/.config/fish/functions/cdx.fish`:
+
+```fish
+function cdx --wraps cdx --description 'Interactive directory navigator wrapper'
+    set -l result_file /tmp/cdx-result.txt
+    rm -f $result_file
+    command cdx $argv
+    if test $status -eq 0 -a -f "$result_file"
+        set -l target (string trim (cat $result_file))
+        rm -f $result_file
+        if test -n "$target" -a -d "$target"
+            builtin cd "$target"
+            command eza --icons --group-directories-first 2>/dev/null; or ls --color=auto
+        end
+    end
+end
+```
+
 ## Usage
 
-| Command | Action |
-|---------|--------|
-| `cdx` | Open TUI at current directory |
-| `cdx <path>` | Jump to path |
-| `cdx <name>` | Jump via zoxide |
-| `cdx -g <query>` | Global content search |
-| `cdx ~` / `cdx ...` | Print HOME path |
+| Command             | Action                        |
+| ------------------- | ----------------------------- |
+| `cdx`               | Open TUI at current directory |
+| `cdx <path>`        | Jump to path                  |
+| `cdx <name>`        | Jump via zoxide               |
+| `cdx -g <query>`    | Global content search         |
+| `cdx ~` / `cdx ...` | Print HOME path               |
 
 ### TUI keybindings
-
-| Key | Action |
-|-----|--------|
-| `Enter` | cd into directory |
-| `Esc` / `Esc²` | Go to parent / Go to HOME |
-| `↑` / `↓` | Navigate list |
-| `Tab` | Change search mode: Directories → Files → Content |
-| `Ctrl+Enter` | Open in yazi/explorer |
-| `Ctrl+A` | Toggle dotfiles |
-| `Ctrl+W` | Toggle WinHidden files |
-| `Ctrl+E` | Edit config file |
-| `Ctrl+C` | Quit |
 
 All keybindings are customizable in `~/.config/cdx/config.toml` under `[keys]`.
 
