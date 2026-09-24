@@ -32,7 +32,7 @@ fn entry_filter(entry: &ignore::DirEntry, show_dotfiles: bool, show_winhidden: b
     if should_exclude(&name, show_dotfiles, show_winhidden) {
         return false;
     }
-    entry.file_type().map_or(false, |ft| ft.is_dir())
+    entry.file_type().is_some_and(|ft| ft.is_dir())
 }
 
 pub fn list_dirs(
@@ -50,7 +50,7 @@ pub fn list_dirs(
         if should_exclude(&name, show_dotfiles, show_winhidden) {
             continue;
         }
-        if !entry.file_type().map_or(false, |ft| ft.is_dir()) {
+        if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
             continue;
         }
         let full_path = entry.path();
@@ -92,7 +92,7 @@ pub fn list_files(
         .build()
         .filter_map(|r| r.ok())
         .filter(|e| {
-            e.path() != root && e.file_type().map_or(false, |ft| ft.is_file())
+            e.path() != root && e.file_type().is_some_and(|ft| ft.is_file())
         })
         .map(|e| DirEntryItem {
             display: e.file_name().to_string_lossy().to_string(),

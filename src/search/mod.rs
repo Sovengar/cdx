@@ -153,14 +153,12 @@ fn collect_matching_dirs(root: &PathBuf, query: &str, max_depth: usize, results:
         true
     });
 
-    for result in builder.build() {
-        if let Ok(entry) = result {
-            if entry.file_type().map_or(false, |ft| ft.is_dir()) {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.to_lowercase().contains(query) {
-                        let path_str = entry.path().to_string_lossy().to_string();
-                        results.push(path_str);
-                    }
+    for entry in builder.build().flatten() {
+        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.to_lowercase().contains(query) {
+                    let path_str = entry.path().to_string_lossy().to_string();
+                    results.push(path_str);
                 }
             }
         }

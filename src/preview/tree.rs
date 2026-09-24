@@ -32,7 +32,7 @@ pub fn build_tree_lines(
                 continue;
             }
 
-            let is_dir = entry.file_type().map_or(false, |t| t.is_dir());
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
             items.push((name, is_dir));
         }
     }

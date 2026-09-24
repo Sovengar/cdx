@@ -79,7 +79,7 @@ pub fn git_info(dir: &Path) -> Option<GitInfo> {
         .args(["-C", &dir.to_string_lossy(), "status", "--porcelain"])
         .output()
         .ok();
-    let dirty = status.map_or(false, |o| !o.stdout.is_empty());
+    let dirty = status.is_some_and(|o| !o.stdout.is_empty());
 
     Some(GitInfo {
         toplevel: top,
