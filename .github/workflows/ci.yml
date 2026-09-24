@@ -71,5 +71,14 @@ jobs:
           toolchain: stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # `execute_search` shells out to `rg` (ripgrep) and the grep.rs integration
+      # tests assert real matches, but the ubuntu runner ships no ripgrep. Install
+      # it for parity with the documented local environment (README "Runtime: rg").
+      - name: Install ripgrep
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo -E apt-get update -q
+          sudo -E apt-get install -y -q ripgrep
+          rg --version
       - name: Test
         run: cargo test --locked
