@@ -19,9 +19,13 @@ CI lives in `.github/workflows/ci.yml` and runs on **every PR** and **every push
 to `master`** (no `paths` filters: a skipped workflow leaves the required checks
 pending forever and deadlocks every PR). Three jobs:
 
-- **`Build`**: `cargo build --locked --all-targets`.
-- **`Lint`**: `cargo clippy --locked --all-targets -- -D warnings` (warnings are errors).
-- **`Test`**: `cargo test --locked`.
+- **`Build`**: `make build` → `cargo build --locked --all-targets`.
+- **`Lint`**: `make lint` → `cargo clippy --locked --all-targets -- -D warnings` (warnings are errors).
+- **`Test`**: `make test` → `cargo test --locked`.
+
+The commands live in the root `Makefile`, and CI invokes those same targets, so
+the local gate (`make check` = build → lint → test) and the CI gate are identical
+by construction.
 
 `--locked` is intentional: a `Cargo.lock` that drifts from `Cargo.toml` fails
 loudly instead of silently re-resolving dependencies.

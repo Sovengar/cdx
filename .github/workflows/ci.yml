@@ -36,7 +36,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build
-        run: cargo build --locked --all-targets
+        run: make build
 
   Lint:
     name: Lint
@@ -56,7 +56,7 @@ jobs:
       # `cargo fmt --check` is deliberately NOT part of the gate yet (an
       # available future add-on, mirroring vroom's single-linter choice).
       - name: Lint
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: make lint
 
   Test:
     name: Test
@@ -81,4 +81,4 @@ jobs:
           sudo -E apt-get install -y -q ripgrep
           rg --version
       - name: Test
-        run: cargo test --locked
+        run: make test
