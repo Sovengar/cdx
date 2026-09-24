@@ -1,0 +1,75 @@
+name: CI
+
+# NOTE: this workflow intentionally has NO `paths` / `paths-ignore` filters.
+# A path-filtered push/PR skips the workflow entirely; a skipped workflow leaves
+# its required status checks stuck in "pending" forever, which deadlocks every
+# PR that does not touch the filtered paths. The gates run on every change.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Least privilege by default; every job inherits this.
+permissions:
+  contents: read
+
+# Superseded runs on the same ref are cancelled so a new push ends the previous
+# check run. The default branch (master) is exempt: every commit landing there
+# gets a complete run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+jobs:
+  Build:
+    name: Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build
+        run: cargo build --locked --all-targets
+
+  Lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+          components: clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Warnings are errors: the gate must not silently accumulate lint debt.
+      # `cargo fmt --check` is deliberately NOT part of the gate yet (an
+      # available future add-on, mirroring vroom's single-linter choice).
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+  Test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Test
+        run: cargo test --locked
