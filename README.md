@@ -1,5 +1,7 @@
 # cdx — interactive directory navigator
 
+[![CI](https://github.com/Sovengar/cdx/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Sovengar/cdx/actions/workflows/ci.yml)
+
 Jump between directories faster than `cd`. Think `zoxide` meets `fzf` in a TUI but with steroids + superpowers + wisdom of _Platon_.
 
 ![screenshot](https://img.shields.io/badge/status-beta-blue)
