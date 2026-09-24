@@ -44,7 +44,7 @@ fn fallback_read_dir(path: &Path) -> Vec<Line<'static>> {
             if name.starts_with('.') {
                 continue;
             }
-            if entry.file_type().map_or(false, |t| t.is_dir()) {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
                 dirs.push(name);
             } else {
                 files.push(name);
@@ -75,7 +75,7 @@ fn fallback_read_dir(path: &Path) -> Vec<Line<'static>> {
 }
 
 pub fn preview_file(path: &Path) -> Text<'static> {
-    match std::process::Command::new("bat")
+    if let Ok(out) = std::process::Command::new("bat")
         .args([
             "--color=always",
             "--line-range",
@@ -85,11 +85,9 @@ pub fn preview_file(path: &Path) -> Text<'static> {
         .arg(path)
         .output()
     {
-        Ok(out) => match out.stdout.into_text() {
-            Ok(text) => return text,
-            Err(_) => {}
-        },
-        Err(_) => {}
+        if let Ok(text) = out.stdout.into_text() {
+            return text;
+        }
     }
 
     match fs::read_to_string(path) {

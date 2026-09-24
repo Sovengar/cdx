@@ -28,10 +28,8 @@ pub fn run(initial_query: Option<String>) -> anyhow::Result<Option<PathBuf>> {
 
         if event::poll(timeout)? {
             match event::read()? {
-                Event::Key(key) => {
-                    if key.kind == KeyEventKind::Press {
-                        app.handle_key(key);
-                    }
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    app.handle_key(key);
                 }
                 Event::Mouse(mouse) => {
                     if app.preview.text.lines.is_empty() {

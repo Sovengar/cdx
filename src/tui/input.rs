@@ -27,10 +27,8 @@ fn handle_popup_key(app: &mut App, key: KeyEvent) {
     match app.popup {
         Some(Popup::ToolSelector) => {
             match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if app.popup_index > 0 {
-                        app.popup_index -= 1;
-                    }
+                KeyCode::Up | KeyCode::Char('k') if app.popup_index > 0 => {
+                    app.popup_index -= 1;
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let tool_count = crate::config::get().tool_selector.len();
@@ -53,15 +51,11 @@ fn handle_popup_key(app: &mut App, key: KeyEvent) {
 
 fn handle_preview_key(app: &mut App, key: KeyEvent) {
     match key.code {
-        KeyCode::Up => {
-            if app.preview.selection > 0 {
-                app.preview.selection -= 1;
-            }
+        KeyCode::Up if app.preview.selection > 0 => {
+            app.preview.selection -= 1;
         }
-        KeyCode::Down => {
-            if app.preview.selection + 1 < app.preview.entries.len() {
-                app.preview.selection += 1;
-            }
+        KeyCode::Down if app.preview.selection + 1 < app.preview.entries.len() => {
+            app.preview.selection += 1;
         }
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Some(idx) = app.list_state.selected() {
@@ -111,10 +105,8 @@ fn handle_preview_key(app: &mut App, key: KeyEvent) {
 
 fn handle_list_key(app: &mut App, key: KeyEvent) {
     match key.code {
-        KeyCode::Left => {
-            if app.cursor_pos > 0 {
-                app.cursor_pos -= 1;
-            }
+        KeyCode::Left if app.cursor_pos > 0 => {
+            app.cursor_pos -= 1;
         }
         KeyCode::Right => {
             let has_preview = !app.preview.text.lines.is_empty()
@@ -131,12 +123,10 @@ fn handle_list_key(app: &mut App, key: KeyEvent) {
         KeyCode::End => {
             app.cursor_pos = app.query.len();
         }
-        KeyCode::Backspace => {
-            if app.cursor_pos > 0 {
-                app.query.remove(app.cursor_pos - 1);
-                app.cursor_pos -= 1;
-                app.apply_query();
-            }
+        KeyCode::Backspace if app.cursor_pos > 0 => {
+            app.query.remove(app.cursor_pos - 1);
+            app.cursor_pos -= 1;
+            app.apply_query();
         }
         KeyCode::Char(c) => {
             if key.modifiers.contains(KeyModifiers::CONTROL) {

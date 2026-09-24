@@ -155,9 +155,7 @@ impl App {
                 );
                 self.apply_query();
             }
-            Mode::Grep => {
-                return;
-            }
+            Mode::Grep => {}
         }
     }
 
