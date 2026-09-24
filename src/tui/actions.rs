@@ -152,7 +152,10 @@ mod tests {
     fn test_open_explorer_with_dir_selected() {
         config::init();
         let root = setup_test_dir("explorer");
-        fs::create_dir_all(root.join("target")).unwrap();
+        // Use a plain name: the default config excludes build dirs like `target`,
+        // so a `target/` subdir would leave the list empty and make this test pass
+        // only when ambient zoxide data happens to contribute an entry.
+        fs::create_dir_all(root.join("subdir")).unwrap();
 
         let mut app = App::new(None).unwrap();
         app.current_dir = root.clone();
