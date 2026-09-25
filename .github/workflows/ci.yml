@@ -71,14 +71,53 @@ jobs:
           toolchain: stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # `execute_search` shells out to `rg` (ripgrep) and the grep.rs integration
-      # tests assert real matches, but the ubuntu runner ships no ripgrep. Install
-      # it for parity with the documented local environment (README "Runtime: rg").
-      - name: Install ripgrep
+      # `execute_search` shells out to `rg` (ripgrep): src/search/mod.rs (4 call
+      # sites), src/tui/grep.rs and src/preview/commands.rs all spawn it, and the
+      # grep.rs integration tests assert real matches. The ubuntu runner ships no
+      # ripgrep, so we provide a pinned static musl build (no libc/apt needed) for
+      # parity with the documented local environment (README "Runtime: rg").
+      # The binary is cached, so download + checksum only run on a cache miss.
+      - name: Restore cached ripgrep
+        id: rg-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/rg-bin
+          # Pinned version + runner arch. Deliberately NO `restore-keys`: a pinned
+          # tool must never silently fall back to a different version.
+          key: ripgrep-15.2.0-x86_64-unknown-linux-musl
+      - name: Download ripgrep (cache miss)
+        if: steps.rg-cache.outputs.cache-hit != 'true'
+        env:
+          RG_VERSION: 15.2.0
         run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo -E apt-get update -q
-          sudo -E apt-get install -y -q ripgrep
+          set -euo pipefail
+          asset="ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          base="https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL -o "$tmp/$asset" "$base/$asset"
+          curl -fsSL -o "$tmp/$asset.sha256" "$base/$asset.sha256"
+          # Integrity: ripgrep publishes a .sha256 per asset. Fail loudly on a
+          # mismatch rather than shipping a corrupted/foreign binary.
+          (cd "$tmp" && sha256sum -c "$asset.sha256") || {
+            echo "ERROR: sha256 mismatch for $asset" >&2
+            exit 1
+          }
+          tar -xzf "$tmp/$asset" -C "$tmp"
+          mkdir -p "$HOME/.cache/rg-bin"
+          install -m 0755 "$tmp/ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl/rg" \
+            "$HOME/.cache/rg-bin/rg"
+      - name: Put ripgrep on PATH
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$HOME/.cache/rg-bin/rg" "$HOME/.local/bin/rg"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v rg || {
+            echo "ERROR: no working rg after cache restore/download" >&2
+            exit 1
+          }
           rg --version
       - name: Test
         run: make test
