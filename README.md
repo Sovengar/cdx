@@ -15,13 +15,13 @@ See [FEATURES.md](FEATURES.md) for the full list.
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/Sovengar/cdx/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/Sovengar/cdx/master/scripts/install.ps1 | iex
 ```
 
 **Linux / macOS:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Sovengar/cdx/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Sovengar/cdx/master/scripts/install.sh | bash
 ```
 
 ## Manual install

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cdx install script — Linux / macOS
-# Usage: curl -fsSL https://raw.githubusercontent.com/Sovengar/cdx/main/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Sovengar/cdx/master/scripts/install.sh | bash
 # Or:   ./scripts/install.sh
 set -euo pipefail
 
