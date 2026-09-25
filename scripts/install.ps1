@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # cdx install script — Windows / PowerShell
-# Usage: irm https://raw.githubusercontent.com/Sovengar/cdx/main/scripts/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/Sovengar/cdx/master/scripts/install.ps1 | iex
 # Or:    ./scripts/install.ps1
 
 $ErrorActionPreference = "Stop"
