@@ -13,6 +13,19 @@ cp target/release/cdx ~/.local/bin/cdx
 
 If the copy fails with **"file in use"**, the user has `cdx` open — ask them to close it first (Ctrl+C / Ctrl+Q), then retry.
 
+## New feature → docs/FEATURES.md + skill
+
+Any **new feature** — and any user-visible change to an existing one — must be
+documented in `docs/FEATURES.md` **in the same change**: add or update its entry with
+what it does and how it is triggered (key, flag or command). A feature that is
+not in `docs/FEATURES.md` does not exist for the next reader. Keep it a concise
+inventory, not a tutorial: the details live in `README.md`.
+
+The same change must also update the global skill
+**`~/.agents/skills/cdx/SKILL.md`** — trigger, commands/flags, keybindings and
+config keys that changed. The skill is the runtime contract agents load before
+working on cdx; a feature absent from it does not exist for them.
+
 ## CI and branch protection
 
 CI lives in `.github/workflows/ci.yml` and runs on **every PR** and **every push

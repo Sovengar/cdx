@@ -7,7 +7,7 @@
 - **Git awareness** — Shows branch, dirty/clean status, git status in preview
 - **Fully configurable** — `~/.config/cdx/config.toml`, including keybindings
 - **Explorer integration** — `Ctrl+O` to open selected item with yazi, nvim, opencode, lazygit (configurable)
-- **Inline editor** — `Ctrl+E` opens selected file in nvim inline
+- **Settings editor** — `Ctrl+E` opens `~/.config/cdx/config.toml` in nvim inline
 - **Cross-platform** — Windows (PowerShell) and Unix
 
 ---
@@ -62,7 +62,7 @@ All modes search from cwd forward.
 - **Directories (no query)**: Uses `read_dir()` with filters `exclude_dirs`, `exclude_win_dirs`, `show_dotfiles`.
 - **Directories (with query)**: Uses async `recursive_dir_search()`.
 - **Files**: Uses `WalkBuilder` with filters from `~/.ignore`, `exclude_dirs`, `exclude_win_dirs`, `show_dotfiles`. Max depth: 5 levels.
-- **Content**: Uses `rg` (ripgrep) with its own filters: `~/.ignore`, `.gitignore`, `.rgignore`. Config's `exclude_dirs` and `show_dotfiles` translate to `--glob` args.
+- **Content**: Uses `rg` (ripgrep) with its own filters: `~/.ignore`, `.gitignore`, `.rgignore`. Config's `exclude_dirs` and `show_dotfiles` translate to `--glob` args. `-g` merges content, filename and dirname matches (priority roots first, then home) and picks the result with `fzf`.
 
 ## List Zone
 
@@ -97,9 +97,11 @@ Supports navigation into subdirectories.
 | ---------- | --------------------------------------------------------- | ------------ |
 | **Enter**  | Navigate to selected dir, clear search                    | —            |
 | **Esc**    | cd .., re-run search if query active. Double Esc → ~      | Back to list |
-| **Tab**    | Cycle modes: Files → Directories → Content, re-run search | —            |
-| **Ctrl+O** | Open selector (yazi, nvim, opencode, lazygit) — inline    | —            |
-| **Ctrl+E** | Open with nvim inline                                     | —            |
+| **Tab**    | Cycle modes: Directories → Files → Content, re-run search | Mode switch  |
+| **Ctrl+O** | Open selector (yazi, nvim, opencode, lazygit) — inline    | `Ctrl+Enter` opens it too |
+| **Ctrl+E** | Open `~/.config/cdx/config.toml` in nvim — inline         | —            |
+| **Ctrl+H** | Toggle dotfiles                                           | —            |
+| **Ctrl+W** | Toggle Windows-hidden entries                             | —            |
 | **Ctrl+C** | Exit TUI, print cwd to console                            | —            |
 
 Tools opened via Ctrl+O/Ctrl+E are **inline** — they pause the TUI, don't close it.

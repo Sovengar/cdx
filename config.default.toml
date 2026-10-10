@@ -38,8 +38,9 @@ toggle_winhidden = "ctrl+w"
 open_settings = "ctrl+e"
 switch_mode = "tab"
 open_explorer = "ctrl+o"
+# go_home = "g"    # unbound by default; set a key to jump to $HOME
 
-# Tool selector (Ctrl+Enter on a directory)
+# Tool selector (Ctrl+O in the list; Ctrl+Enter in the preview)
 # Each entry needs a display name and the command to run.
 # Order in this list = order in the popup.
 [[tool_selector]]

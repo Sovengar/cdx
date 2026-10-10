@@ -8,7 +8,7 @@ Jump between directories faster than `cd`. Think `zoxide` meets `fzf` in a TUI b
 
 ## Features
 
-See [FEATURES.md](FEATURES.md) for the full list.
+See [docs/FEATURES.md](docs/FEATURES.md) for the full list.
 
 ## Quick install
 
@@ -111,7 +111,7 @@ All keybindings are customizable in `~/.config/cdx/config.toml` under `[keys]`.
 
 ## Dependencies
 
-- **Runtime:** `rg` (ripgrep), `zoxide`, `fzf` (for `-g` mode), `yazi` (for `Ctrl+Enter`)
+- **Runtime:** `rg` (ripgrep), `zoxide`, `fzf` (for `-g` mode), `yazi` (tool selector: `Ctrl+O` in the list, `Ctrl+Enter` in the preview)
 - **Optional:** `eza`, `bat` (for enhanced preview)
 
 ## Configuration
