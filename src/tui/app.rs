@@ -85,11 +85,16 @@ impl App {
     pub fn new(initial_query: Option<String>) -> anyhow::Result<Self> {
         let current_dir = std::env::current_dir()?;
         let cfg = config::get();
-        let zoxide_cache = zoxide::get_list();
-
         let query = initial_query.unwrap_or_default();
         let cursor_pos = query.len();
         let zoxide_initial_visible = query.is_empty();
+        // Zoxide suggestions are only displayed for an empty query. Avoid a
+        // synchronous `zoxide query --list` before opening the fallback TUI.
+        let zoxide_cache = if zoxide_initial_visible {
+            zoxide::get_list()
+        } else {
+            Vec::new()
+        };
 
         let mut search = SearchState::new(cfg.find_debounce_ms);
         if !query.is_empty() {
@@ -467,6 +472,7 @@ mod tests {
         assert_eq!(app.query, "hello");
         assert_eq!(app.cursor_pos, 5);
         assert!(!app.zoxide_initial_visible, "query present → zoxide hidden");
+        assert!(app.zoxide_cache.is_empty(), "query present → zoxide is not loaded");
     }
 
     // ── Mode switching ──────────────────────────────────────────

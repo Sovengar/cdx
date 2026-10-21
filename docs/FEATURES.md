@@ -6,7 +6,7 @@
 - **Tree preview** — Navigate directory trees from the preview panel
 - **Git awareness** — Shows branch, dirty/clean status, git status in preview
 - **Fully configurable** — `~/.config/cdx/config.toml`, including keybindings
-- **Explorer integration** — `Ctrl+O` to open selected item with yazi, nvim, opencode, lazygit (configurable)
+- **Explorer integration** — `Ctrl+O` to open selected item with yazi, nvim, pi, lazygit (configurable)
 - **Settings editor** — `Ctrl+E` opens `~/.config/cdx/config.toml` in nvim inline
 - **Cross-platform** — Windows (PowerShell) and Unix
 
@@ -29,6 +29,10 @@ cdx ...          go to $HOME
 1. `cdx <path>` → direct cd if the path exists
 2. If not → `zoxide query` (frecency, if installed)
 3. If no match → opens TUI with pre-filled query
+
+When opening this fallback TUI, cdx does not load zoxide suggestions: they are
+not shown for a non-empty query, so this avoids delaying the first frame on a
+cold zoxide database.
 
 ---
 
@@ -98,7 +102,7 @@ Supports navigation into subdirectories.
 | **Enter**  | Navigate to selected dir, clear search                    | —            |
 | **Esc**    | cd .., re-run search if query active. Double Esc → ~      | Back to list |
 | **Tab**    | Cycle modes: Directories → Files → Content, re-run search | Mode switch  |
-| **Ctrl+O** | Open selector (yazi, nvim, opencode, lazygit) — inline    | `Ctrl+Enter` opens it too |
+| **Ctrl+O** | Open selector (yazi, nvim, pi, lazygit) — inline          | `Ctrl+Enter` opens it too |
 | **Ctrl+E** | Open `~/.config/cdx/config.toml` in nvim — inline         | —            |
 | **Ctrl+H** | Toggle dotfiles                                           | —            |
 | **Ctrl+W** | Toggle Windows-hidden entries                             | —            |

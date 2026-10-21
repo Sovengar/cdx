@@ -15,7 +15,7 @@ Feature: Ctrl+ Keybindings
     And the first tool (yazi) is highlighted
 
   Scenario: Tool selector shows configurable tools
-    Given the config has tool_selector: [yazi, nvim, opencode, lazygit]
+    Given the config has tool_selector: [yazi, nvim, pi, lazygit]
     When the tool selector opens
     Then 4 tools are listed in order
 

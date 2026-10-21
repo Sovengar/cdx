@@ -63,7 +63,7 @@ Feature: Configuration
       | name    | command  |
       | yazi    | yazi     |
       | nvim    | nvim     |
-      | opencode| opencode |
+      | pi      | pi       |
       | lazygit | lazygit  |
     When the tool selector opens
     Then all 4 tools are shown in the configured order

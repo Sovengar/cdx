@@ -51,7 +51,7 @@ fn test_tool_selector_defaults() {
     assert_eq!(cfg.tool_selector.len(), 4);
     assert_eq!(cfg.tool_selector[0].name, "yazi");
     assert_eq!(cfg.tool_selector[1].name, "nvim");
-    assert_eq!(cfg.tool_selector[2].name, "opencode");
+    assert_eq!(cfg.tool_selector[2].name, "pi");
     assert_eq!(cfg.tool_selector[3].name, "lazygit");
 }
 ```

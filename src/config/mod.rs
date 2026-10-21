@@ -17,7 +17,7 @@ fn default_tool_selector() -> Vec<ToolEntry> {
     vec![
         ToolEntry { name: "yazi".into(), command: "yazi".into() },
         ToolEntry { name: "nvim".into(), command: "nvim".into() },
-        ToolEntry { name: "opencode".into(), command: "opencode".into() },
+        ToolEntry { name: "pi".into(), command: "pi".into() },
         ToolEntry { name: "lazygit".into(), command: "lazygit".into() },
     ]
 }
@@ -300,7 +300,7 @@ mod tests {
         assert_eq!(cfg.tool_selector[0].name, "yazi");
         assert_eq!(cfg.tool_selector[0].command, "yazi");
         assert_eq!(cfg.tool_selector[1].name, "nvim");
-        assert_eq!(cfg.tool_selector[2].name, "opencode");
+        assert_eq!(cfg.tool_selector[2].name, "pi");
         assert_eq!(cfg.tool_selector[3].name, "lazygit");
     }
 

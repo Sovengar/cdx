@@ -52,8 +52,8 @@ name = "nvim"
 command = "nvim"
 
 [[tool_selector]]
-name = "opencode"
-command = "opencode"
+name = "pi"
+command = "pi"
 
 [[tool_selector]]
 name = "lazygit"
