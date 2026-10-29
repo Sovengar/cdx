@@ -34,7 +34,7 @@ jobs:
         with:
           toolchain: stable
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build
         run: make build
 
@@ -51,7 +51,7 @@ jobs:
           toolchain: stable
           components: clippy
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Warnings are errors: the gate must not silently accumulate lint debt.
       # `cargo fmt --check` is deliberately NOT part of the gate yet (an
       # available future add-on, mirroring vroom's single-linter choice).
@@ -70,7 +70,7 @@ jobs:
         with:
           toolchain: stable
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # `execute_search` shells out to `rg` (ripgrep): src/search/mod.rs (4 call
       # sites), src/tui/grep.rs and src/preview/commands.rs all spawn it, and the
       # grep.rs integration tests assert real matches. The ubuntu runner ships no
