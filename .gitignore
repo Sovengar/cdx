@@ -3,3 +3,5 @@
 # Worktrees de Worktrunk (wt): el worktree-path del config global es
 # relativo, asi que caen dentro del repo en .worktrees/.
 .worktrees/
+# Local AI runtime state
+.atl/
